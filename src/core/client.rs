@@ -38,7 +38,7 @@ impl Default for RetryConfig {
             max_retries: 3,
             initial_wait: Duration::from_millis(500),
             max_wait: Duration::from_secs(20),
-            use_jitter: false,
+            use_jitter: true,
         }
     }
 }
