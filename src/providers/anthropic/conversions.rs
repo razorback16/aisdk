@@ -47,41 +47,46 @@ impl From<LanguageModelOptions> for AnthropicOptions {
                             ),
                     });
                 }
-                Message::Assistant(a) => match a.content {
-                    LanguageModelResponseContentType::Text(text) => {
-                        messages.push(AnthropicMessageParam::Assistant {
-                            content: vec![AnthropicAssistantMessageParamContent::Text { text }],
-                        });
-                    }
-                    LanguageModelResponseContentType::ToolCall(tool) => {
-                        messages.push(AnthropicMessageParam::Assistant {
-                            content: vec![AnthropicAssistantMessageParamContent::ToolUse {
+                Message::Assistant(a) => {
+                    let block = match a.content {
+                        LanguageModelResponseContentType::Text(text) => {
+                            AnthropicAssistantMessageParamContent::Text { text }
+                        }
+                        LanguageModelResponseContentType::ToolCall(tool) => {
+                            AnthropicAssistantMessageParamContent::ToolUse {
                                 id: tool.tool.id,
                                 input: tool.input,
                                 name: tool.tool.name,
-                            }],
-                        });
-                    }
-                    LanguageModelResponseContentType::Reasoning {
-                        content,
-                        extensions,
-                    } => {
-                        // Retrieve Anthropic-specific signature from extensions
-                        let signature = extensions
-                            .get::<extensions::AnthropicThinkingMetadata>()
-                            .signature
-                            .clone()
-                            .unwrap_or_else(|| content.clone());
-
-                        messages.push(AnthropicMessageParam::Assistant {
-                            content: vec![AnthropicAssistantMessageParamContent::Thinking {
+                            }
+                        }
+                        LanguageModelResponseContentType::Reasoning {
+                            content,
+                            extensions,
+                        } => {
+                            let signature = extensions
+                                .get::<extensions::AnthropicThinkingMetadata>()
+                                .signature
+                                .clone()
+                                .unwrap_or_else(|| content.clone());
+                            AnthropicAssistantMessageParamContent::Thinking {
                                 thinking: content.clone(),
                                 signature,
-                            }],
+                            }
+                        }
+                        LanguageModelResponseContentType::NotSupported(_) => continue,
+                    };
+                    // Merge consecutive assistant messages into a single message
+                    // with multiple content blocks. This prevents 400 errors from
+                    // Anthropic which requires strict user/assistant alternation.
+                    if let Some(AnthropicMessageParam::Assistant { content }) = messages.last_mut()
+                    {
+                        content.push(block);
+                    } else {
+                        messages.push(AnthropicMessageParam::Assistant {
+                            content: vec![block],
                         });
                     }
-                    LanguageModelResponseContentType::NotSupported(_) => {}
-                },
+                }
                 Message::Tool(tool) => {
                     messages.push(AnthropicMessageParam::User {
                         content: crate::providers::anthropic::client::AnthropicUserMessageContent::Blocks(vec![
