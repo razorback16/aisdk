@@ -56,7 +56,7 @@ impl<M: ModelName> LanguageModel for Anthropic<M> {
                     let extensions = Extensions::default();
                     extensions
                         .get_mut::<extensions::AnthropicThinkingMetadata>()
-                        .signature = Some(signature);
+                        .signature = signature;
                     collected.push(LanguageModelResponseContentType::Reasoning {
                         content: thinking,
                         extensions,

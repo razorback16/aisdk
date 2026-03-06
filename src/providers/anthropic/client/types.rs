@@ -56,14 +56,20 @@ pub(crate) struct AnthropicMessageResponse {
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub(crate) struct AnthropicUsage {
-    pub cache_creation: AnthropicCacheCreation,
+    #[serde(default)]
+    pub cache_creation: Option<AnthropicCacheCreation>,
+    #[serde(default)]
     pub cache_creation_input_tokens: usize,
+    #[serde(default)]
     pub cache_read_input_tokens: usize,
+    #[serde(default)]
     pub input_tokens: usize,
+    #[serde(default)]
     pub output_tokens: usize,
-    #[serde(default = "AnthropicServerToolUsage::default")]
-    pub server_tool_use: AnthropicServerToolUsage,
-    pub service_tier: String,
+    #[serde(default)]
+    pub server_tool_use: Option<AnthropicServerToolUsage>,
+    #[serde(default)]
+    pub service_tier: Option<String>,
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
@@ -87,7 +93,11 @@ pub(crate) enum AnthropicContentBlock {
         citations: Vec<AnthropicCitation>,
     },
     #[serde(rename = "thinking")]
-    Thinking { signature: String, thinking: String },
+    Thinking {
+        #[serde(default)]
+        signature: Option<String>,
+        thinking: String,
+    },
     #[serde(rename = "redacted_thinking")]
     RedactedThinking { data: String },
     #[serde(rename = "tool_use")]
