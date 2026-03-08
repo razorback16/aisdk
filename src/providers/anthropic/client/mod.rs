@@ -20,7 +20,7 @@ pub(crate) struct AnthropicOptions {
     pub(crate) model: String,
     #[builder(default)]
     pub(crate) messages: Vec<AnthropicMessageParam>,
-    #[builder(default = "4096")]
+    #[builder(default = "64_000")]
     pub(crate) max_tokens: u32,
     #[builder(default)]
     #[serde(skip_serializing_if = "Option::is_none")]

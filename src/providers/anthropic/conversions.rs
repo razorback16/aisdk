@@ -16,9 +16,8 @@ impl From<LanguageModelOptions> for AnthropicOptions {
         let mut request = AnthropicOptions::builder();
         request.model("");
 
-        // TODO: anthropic max_tokens is required. handle compile
-        // time checks if not set in core
-        let max_tokens = options.max_output_tokens.unwrap_or(10_000);
+        // Set max_tokens from the core options, defaulting to 64K.
+        request.max_tokens(options.max_output_tokens.unwrap_or(64_000));
 
         // TODO: temperature, top_p, top_k, stop_sequences, and max_tokens are not mapped for Anthropic yet.
         // Add support once provider behavior is confirmed and covered.
@@ -138,17 +137,17 @@ impl From<LanguageModelOptions> for AnthropicOptions {
         request.thinking(options.reasoning_effort.map(|effort| match effort {
             // Instant disables thinking entirely
             ReasoningEffort::Instant => AnthropicThinking::Disable,
-            // Low is 25% of the max_tokens
+            // Low: 8K budget tokens
             ReasoningEffort::Low => AnthropicThinking::Enable {
-                budget_tokens: (max_tokens / 4) as usize,
+                budget_tokens: 8_000,
             },
-            // Medium is 50% of the max_tokens
+            // Medium: 16K budget tokens
             ReasoningEffort::Medium => AnthropicThinking::Enable {
-                budget_tokens: (max_tokens / 2) as usize,
+                budget_tokens: 16_000,
             },
-            // High is 75% of the max_tokens
+            // High: 32K budget tokens
             ReasoningEffort::High => AnthropicThinking::Enable {
-                budget_tokens: (max_tokens - (max_tokens / 4)) as usize,
+                budget_tokens: 32_000,
             },
         }));
 
