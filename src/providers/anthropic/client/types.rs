@@ -220,9 +220,9 @@ pub(crate) struct AnthropicTool {
 #[serde(tag = "type")]
 pub(crate) enum AnthropicThinking {
     #[default]
-    #[serde(rename = "disable")]
+    #[serde(rename = "disabled")]
     Disable,
-    #[serde(rename = "enable")]
+    #[serde(rename = "enabled")]
     Enable { budget_tokens: usize },
 }
 
