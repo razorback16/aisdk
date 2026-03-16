@@ -2,10 +2,11 @@
 //!
 //! Implements `LanguageModelClient` for `Vllm<M>`, handling request construction,
 //! authentication, and SSE stream parsing for vLLM's chat completions API.
+//!
+//! Overrides `body()` to inject vLLM-specific fields (`chat_template_kwargs`,
+//! `include_reasoning`) into the standard OpenAI request body.
 
 pub(crate) mod types;
-
-pub(crate) use types::VllmChatCompletionsOptions;
 
 use crate::core::capabilities::ModelName;
 use crate::core::client::LanguageModelClient;
@@ -51,8 +52,30 @@ impl<M: ModelName> LanguageModelClient for Vllm<M> {
     }
 
     fn body(&self) -> reqwest::Body {
-        let body = serde_json::to_string(&self.options).unwrap();
-        reqwest::Body::from(body)
+        // Serialize the inner OpenAI options
+        let mut body: serde_json::Value = serde_json::to_value(&self.inner.options).unwrap();
+
+        // Remove OpenAI-specific fields that vLLM doesn't use
+        if let serde_json::Value::Object(ref mut map) = body {
+            map.remove("reasoning_effort");
+            map.remove("verbosity");
+            map.remove("logit_bias");
+            map.remove("logprobs");
+            map.remove("top_logprobs");
+
+            // Inject vLLM-specific fields
+            if let Some(kwargs) = &self.vllm_chat_template_kwargs {
+                map.insert("chat_template_kwargs".to_string(), kwargs.clone());
+            }
+            if let Some(include) = self.vllm_include_reasoning {
+                map.insert(
+                    "include_reasoning".to_string(),
+                    serde_json::Value::Bool(include),
+                );
+            }
+        }
+
+        reqwest::Body::from(serde_json::to_string(&body).unwrap())
     }
 
     fn parse_stream_sse(

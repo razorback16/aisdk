@@ -5,7 +5,6 @@
 
 pub mod capabilities;
 pub(crate) mod client;
-pub(crate) mod conversions;
 pub mod language_model;
 pub mod settings;
 
@@ -15,17 +14,20 @@ use crate::core::DynamicModel;
 use crate::core::capabilities::ModelName;
 use crate::core::utils::validate_base_url;
 use crate::error::Result;
-use client::VllmChatCompletionsOptions;
+use crate::providers::openai_chat_completions::OpenAIChatCompletions;
 use settings::VllmSettings;
 
-/// The vLLM provider.
+/// The vLLM provider, wrapping OpenAI Chat Completions with vLLM-specific extensions.
 #[derive(Debug, Clone)]
 pub struct Vllm<M: ModelName> {
     /// Configuration settings for the vLLM provider.
     pub settings: VllmSettings,
-    /// Request options for the API call.
-    pub(crate) options: VllmChatCompletionsOptions,
-    _phantom: PhantomData<M>,
+    /// The inner OpenAI Chat Completions provider.
+    pub(crate) inner: OpenAIChatCompletions<M>,
+    /// Transient per-request `chat_template_kwargs` (set during generate/stream).
+    pub(crate) vllm_chat_template_kwargs: Option<serde_json::Value>,
+    /// Transient per-request `include_reasoning` flag (set during generate/stream).
+    pub(crate) vllm_include_reasoning: Option<bool>,
 }
 
 impl<M: ModelName> Vllm<M> {
@@ -38,15 +40,17 @@ impl<M: ModelName> Vllm<M> {
 impl<M: ModelName> Default for Vllm<M> {
     fn default() -> Self {
         let settings = VllmSettings::default();
-        let options = VllmChatCompletionsOptions {
-            model: M::MODEL_NAME.to_string(),
-            ..Default::default()
-        };
+        let mut inner = OpenAIChatCompletions::default();
+        inner.settings.provider_name = settings.provider_name.clone();
+        inner.settings.base_url = settings.base_url.clone();
+        inner.settings.api_key = settings.api_key.clone();
+        inner.settings.path = settings.path.clone();
 
         Self {
             settings,
-            options,
-            _phantom: PhantomData,
+            inner,
+            vllm_chat_template_kwargs: None,
+            vllm_include_reasoning: None,
         }
     }
 }
@@ -72,15 +76,17 @@ impl Vllm<DynamicModel> {
     /// A configured `Vllm<DynamicModel>` provider instance with default settings.
     pub fn model_name(name: impl Into<String>) -> Self {
         let settings = VllmSettings::default();
-        let options = VllmChatCompletionsOptions {
-            model: name.into(),
-            ..Default::default()
-        };
+        let mut inner = OpenAIChatCompletions::<DynamicModel>::model_name(name);
+        inner.settings.provider_name = settings.provider_name.clone();
+        inner.settings.base_url = settings.base_url.clone();
+        inner.settings.api_key = settings.api_key.clone();
+        inner.settings.path = settings.path.clone();
 
         Self {
             settings,
-            options,
-            _phantom: PhantomData,
+            inner,
+            vllm_chat_template_kwargs: None,
+            vllm_include_reasoning: None,
         }
     }
 }
@@ -88,21 +94,22 @@ impl Vllm<DynamicModel> {
 /// Builder for the vLLM provider.
 pub struct VllmBuilder<M: ModelName> {
     settings: VllmSettings,
-    options: VllmChatCompletionsOptions,
+    inner: OpenAIChatCompletions<M>,
     _phantom: PhantomData<M>,
 }
 
 impl<M: ModelName> Default for VllmBuilder<M> {
     fn default() -> Self {
         let settings = VllmSettings::default();
-        let options = VllmChatCompletionsOptions {
-            model: M::MODEL_NAME.to_string(),
-            ..Default::default()
-        };
+        let mut inner = OpenAIChatCompletions::default();
+        inner.settings.provider_name = settings.provider_name.clone();
+        inner.settings.base_url = settings.base_url.clone();
+        inner.settings.api_key = settings.api_key.clone();
+        inner.settings.path = settings.path.clone();
 
         Self {
             settings,
-            options,
+            inner,
             _phantom: PhantomData,
         }
     }
@@ -122,7 +129,7 @@ impl VllmBuilder<DynamicModel> {
     ///
     /// The builder with the model name set.
     pub fn model_name(mut self, model_name: impl Into<String>) -> Self {
-        self.options.model = model_name.into();
+        self.inner.options.model = model_name.into();
         self
     }
 }
@@ -130,25 +137,33 @@ impl VllmBuilder<DynamicModel> {
 impl<M: ModelName> VllmBuilder<M> {
     /// Sets the provider name. Defaults to "vLLM".
     pub fn provider_name(mut self, provider_name: impl Into<String>) -> Self {
-        self.settings.provider_name = provider_name.into();
+        let name = provider_name.into();
+        self.settings.provider_name = name.clone();
+        self.inner.settings.provider_name = name;
         self
     }
 
     /// Sets the base URL for the vLLM API.
     pub fn base_url(mut self, base_url: impl Into<String>) -> Self {
-        self.settings.base_url = base_url.into();
+        let url = base_url.into();
+        self.settings.base_url = url.clone();
+        self.inner.settings.base_url = url;
         self
     }
 
     /// Sets the API key for the vLLM API.
     pub fn api_key(mut self, api_key: impl Into<String>) -> Self {
-        self.settings.api_key = api_key.into();
+        let key = api_key.into();
+        self.settings.api_key = key.clone();
+        self.inner.settings.api_key = key;
         self
     }
 
     /// Sets a custom API path, overriding the default.
     pub fn path(mut self, path: impl Into<String>) -> Self {
-        self.settings.path = Some(path.into());
+        let p = Some(path.into());
+        self.settings.path = p.clone();
+        self.inner.settings.path = p;
         self
     }
 
@@ -178,16 +193,17 @@ impl<M: ModelName> VllmBuilder<M> {
     /// # Returns
     ///
     /// A `Result` containing the configured `Vllm` provider or an `Error`.
-    pub fn build(self) -> Result<Vllm<M>> {
+    pub fn build(mut self) -> Result<Vllm<M>> {
         let base_url = validate_base_url(&self.settings.base_url)?;
 
+        self.inner.settings.base_url = base_url.clone();
+        self.settings.base_url = base_url;
+
         Ok(Vllm {
-            settings: VllmSettings {
-                base_url,
-                ..self.settings
-            },
-            options: self.options,
-            _phantom: PhantomData,
+            settings: self.settings,
+            inner: self.inner,
+            vllm_chat_template_kwargs: None,
+            vllm_include_reasoning: None,
         })
     }
 }

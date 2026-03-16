@@ -2,27 +2,28 @@
 //!
 //! Similar to the OpenAI Chat Completions implementation but reads `reasoning`
 //! instead of `reasoning_content` from responses and stream deltas, and uses
-//! vLLM-specific request types with `chat_template_kwargs`.
+//! vLLM-specific request fields via `chat_template_kwargs`.
 
 use crate::core::capabilities::ModelName;
 use crate::core::client::LanguageModelClient;
 use crate::core::language_model::{
     LanguageModel, LanguageModelOptions, LanguageModelResponse, LanguageModelResponseContentType,
-    LanguageModelStreamChunk, LanguageModelStreamChunkType, ProviderStream,
+    LanguageModelStreamChunk, LanguageModelStreamChunkType, ProviderStream, ReasoningEffort,
 };
 use crate::core::messages::AssistantMessage;
 use crate::core::tools::ToolCallInfo;
 use crate::error::Result;
+use crate::providers::openai_chat_completions::client::ChatCompletionsOptions;
 use crate::providers::vllm::Vllm;
 use crate::providers::vllm::client::types;
-use crate::providers::vllm::conversions;
+use crate::providers::vllm::settings::VllmSettings;
 use async_trait::async_trait;
 use futures::StreamExt;
 
 #[async_trait]
 impl<M: ModelName> LanguageModel for Vllm<M> {
     fn name(&self) -> String {
-        self.options.model.clone()
+        self.inner.options.model.clone()
     }
 
     async fn generate_text(
@@ -30,9 +31,17 @@ impl<M: ModelName> LanguageModel for Vllm<M> {
         options: LanguageModelOptions,
     ) -> Result<LanguageModelResponse> {
         let additional_headers = options.headers.clone();
-        let mut opts = conversions::convert_options(options, &self.settings);
-        opts.model = self.options.model.clone();
-        self.options = opts;
+
+        // Build vLLM-specific reasoning kwargs before converting options
+        let (chat_template_kwargs, include_reasoning) =
+            build_reasoning_kwargs(options.reasoning_effort.as_ref(), &self.settings);
+        self.vllm_chat_template_kwargs = chat_template_kwargs;
+        self.vllm_include_reasoning = include_reasoning;
+
+        // Use standard From conversion
+        let mut opts: ChatCompletionsOptions = options.into();
+        opts.model = self.inner.options.model.clone();
+        self.inner.options = opts;
 
         let response: types::VllmChatCompletionsResponse = self
             .send(&self.settings.base_url, additional_headers)
@@ -42,20 +51,20 @@ impl<M: ModelName> LanguageModel for Vllm<M> {
 
         for choice in response.choices {
             // Handle reasoning content (vLLM uses "reasoning" field)
-            if let Some(reasoning) = choice.message.reasoning {
-                if !reasoning.is_empty() {
-                    contents.push(LanguageModelResponseContentType::Reasoning {
-                        content: reasoning,
-                        extensions: Default::default(),
-                    });
-                }
+            if let Some(reasoning) = choice.message.reasoning
+                && !reasoning.is_empty()
+            {
+                contents.push(LanguageModelResponseContentType::Reasoning {
+                    content: reasoning,
+                    extensions: Default::default(),
+                });
             }
 
             // Handle text content
-            if let Some(text) = choice.message.content {
-                if !text.is_empty() {
-                    contents.push(LanguageModelResponseContentType::Text(text));
-                }
+            if let Some(text) = choice.message.content
+                && !text.is_empty()
+            {
+                contents.push(LanguageModelResponseContentType::Text(text));
             }
 
             // Handle tool calls
@@ -80,10 +89,18 @@ impl<M: ModelName> LanguageModel for Vllm<M> {
 
     async fn stream_text(&mut self, options: LanguageModelOptions) -> Result<ProviderStream> {
         let additional_headers = options.headers.clone();
-        let mut opts = conversions::convert_options(options, &self.settings);
-        opts.model = self.options.model.clone();
+
+        // Build vLLM-specific reasoning kwargs before converting options
+        let (chat_template_kwargs, include_reasoning) =
+            build_reasoning_kwargs(options.reasoning_effort.as_ref(), &self.settings);
+        self.vllm_chat_template_kwargs = chat_template_kwargs;
+        self.vllm_include_reasoning = include_reasoning;
+
+        // Use standard From conversion
+        let mut opts: ChatCompletionsOptions = options.into();
+        opts.model = self.inner.options.model.clone();
         opts.stream = Some(true);
-        self.options = opts;
+        self.inner.options = opts;
 
         let stream = self
             .send_and_stream(&self.settings.base_url, additional_headers)
@@ -233,5 +250,168 @@ impl<M: ModelName> LanguageModel for Vllm<M> {
         });
 
         Ok(Box::pin(stream))
+    }
+}
+
+// ============================================================================
+// Reasoning effort -> chat_template_kwargs + include_reasoning
+// ============================================================================
+
+/// Builds vLLM-specific `chat_template_kwargs` and `include_reasoning` from
+/// the SDK reasoning effort level and provider settings.
+fn build_reasoning_kwargs(
+    reasoning_effort: Option<&ReasoningEffort>,
+    settings: &VllmSettings,
+) -> (Option<serde_json::Value>, Option<bool>) {
+    match reasoning_effort {
+        Some(ReasoningEffort::None) => {
+            // Explicitly disable reasoning
+            let mut kwargs = settings
+                .chat_template_kwargs
+                .clone()
+                .unwrap_or_else(|| serde_json::json!({}));
+            // Ensure enable_thinking is explicitly false
+            if let serde_json::Value::Object(ref mut map) = kwargs {
+                map.insert(
+                    "enable_thinking".to_string(),
+                    serde_json::Value::Bool(false),
+                );
+            }
+            (Some(kwargs), Some(false))
+        }
+        Some(effort) => {
+            // Build reasoning kwargs
+            let effort_str = match effort {
+                ReasoningEffort::Low => "low",
+                ReasoningEffort::Medium => "medium",
+                ReasoningEffort::High => "high",
+                ReasoningEffort::XHigh => "high", // vLLM doesn't support xhigh
+                ReasoningEffort::None => unreachable!(),
+            };
+
+            let mut kwargs = serde_json::json!({
+                "enable_thinking": true
+            });
+
+            // For Low/Medium/High/XHigh, also add reasoning_effort
+            kwargs.as_object_mut().unwrap().insert(
+                "reasoning_effort".to_string(),
+                serde_json::json!(effort_str),
+            );
+
+            // Deep merge with settings defaults (reasoning kwargs take precedence)
+            if let Some(default_kwargs) = &settings.chat_template_kwargs {
+                let mut merged = default_kwargs.clone();
+                merge_json(&mut merged, kwargs);
+                (Some(merged), Some(true))
+            } else {
+                (Some(kwargs), Some(true))
+            }
+        }
+        None => {
+            // No reasoning effort set; use settings defaults if present
+            let kwargs = settings.chat_template_kwargs.clone();
+            let include_reasoning = settings.include_reasoning;
+            (kwargs, include_reasoning)
+        }
+    }
+}
+
+/// Shallow-merges `overlay` into `base`. For object values, overlay keys
+/// take precedence over base keys.
+fn merge_json(base: &mut serde_json::Value, overlay: serde_json::Value) {
+    if let (serde_json::Value::Object(base_map), serde_json::Value::Object(overlay_map)) =
+        (base, overlay)
+    {
+        for (key, value) in overlay_map {
+            base_map.insert(key, value);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn default_settings() -> VllmSettings {
+        VllmSettings::default()
+    }
+
+    #[test]
+    fn test_reasoning_effort_none_disables_reasoning() {
+        let (kwargs, include_reasoning) =
+            build_reasoning_kwargs(Some(&ReasoningEffort::None), &default_settings());
+        assert_eq!(include_reasoning, Some(false));
+        let kwargs = kwargs.unwrap();
+        assert_eq!(kwargs["enable_thinking"], json!(false));
+    }
+
+    #[test]
+    fn test_reasoning_effort_high_enables_thinking() {
+        let (kwargs, include_reasoning) =
+            build_reasoning_kwargs(Some(&ReasoningEffort::High), &default_settings());
+        assert_eq!(include_reasoning, Some(true));
+
+        let kwargs = kwargs.unwrap();
+        assert_eq!(kwargs["enable_thinking"], json!(true));
+        assert_eq!(kwargs["reasoning_effort"], json!("high"));
+    }
+
+    #[test]
+    fn test_reasoning_effort_xhigh_maps_to_high() {
+        let (kwargs, include_reasoning) =
+            build_reasoning_kwargs(Some(&ReasoningEffort::XHigh), &default_settings());
+        assert_eq!(include_reasoning, Some(true));
+
+        let kwargs = kwargs.unwrap();
+        assert_eq!(kwargs["enable_thinking"], json!(true));
+        assert_eq!(kwargs["reasoning_effort"], json!("high"));
+    }
+
+    #[test]
+    fn test_reasoning_effort_low() {
+        let (kwargs, include_reasoning) =
+            build_reasoning_kwargs(Some(&ReasoningEffort::Low), &default_settings());
+        assert_eq!(include_reasoning, Some(true));
+
+        let kwargs = kwargs.unwrap();
+        assert_eq!(kwargs["enable_thinking"], json!(true));
+        assert_eq!(kwargs["reasoning_effort"], json!("low"));
+    }
+
+    #[test]
+    fn test_settings_kwargs_merged_with_reasoning() {
+        let settings = VllmSettings {
+            chat_template_kwargs: Some(json!({
+                "custom_key": "custom_value",
+                "enable_thinking": false
+            })),
+            ..Default::default()
+        };
+
+        let (kwargs, include_reasoning) =
+            build_reasoning_kwargs(Some(&ReasoningEffort::Medium), &settings);
+        assert_eq!(include_reasoning, Some(true));
+
+        let kwargs = kwargs.unwrap();
+        // Reasoning kwargs take precedence
+        assert_eq!(kwargs["enable_thinking"], json!(true));
+        assert_eq!(kwargs["reasoning_effort"], json!("medium"));
+        // Settings defaults are preserved
+        assert_eq!(kwargs["custom_key"], json!("custom_value"));
+    }
+
+    #[test]
+    fn test_no_reasoning_uses_settings_defaults() {
+        let settings = VllmSettings {
+            chat_template_kwargs: Some(json!({"enable_thinking": true})),
+            include_reasoning: Some(true),
+            ..Default::default()
+        };
+
+        let (kwargs, include_reasoning) = build_reasoning_kwargs(None, &settings);
+        assert_eq!(include_reasoning, Some(true));
+        assert_eq!(kwargs, Some(json!({"enable_thinking": true})));
     }
 }
