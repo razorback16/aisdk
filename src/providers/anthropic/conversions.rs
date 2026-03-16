@@ -135,8 +135,8 @@ impl From<LanguageModelOptions> for AnthropicOptions {
 
         // convert reasoning to antropic thinking
         request.thinking(options.reasoning_effort.map(|effort| match effort {
-            // Instant disables thinking entirely
-            ReasoningEffort::Instant => AnthropicThinking::Disable,
+            // None disables thinking entirely
+            ReasoningEffort::None => AnthropicThinking::Disable,
             // Low: 8K budget tokens
             ReasoningEffort::Low => AnthropicThinking::Enable {
                 budget_tokens: 8_000,
@@ -148,6 +148,10 @@ impl From<LanguageModelOptions> for AnthropicOptions {
             // High: 32K budget tokens
             ReasoningEffort::High => AnthropicThinking::Enable {
                 budget_tokens: 32_000,
+            },
+            // XHigh is 90% of the max_tokens
+            ReasoningEffort::XHigh => AnthropicThinking::Enable {
+                budget_tokens: ((max_tokens * 9) / 10) as usize,
             },
         }));
 

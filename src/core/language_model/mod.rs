@@ -622,8 +622,8 @@ pub enum StopReason {
 /// Levels of reasoning effort for language models that support it.
 #[derive(Debug, Clone, Copy, Default)]
 pub enum ReasoningEffort {
-    /// Instant/no reasoning — near-realtime responses.
-    Instant,
+    /// No reasoning — near-realtime responses.
+    None,
     /// Low reasoning effort.
     #[default]
     Low,
@@ -631,6 +631,8 @@ pub enum ReasoningEffort {
     Medium,
     /// High reasoning effort.
     High,
+    /// Extra-high reasoning effort (OpenAI-specific).
+    XHigh,
 }
 
 #[cfg(test)]
