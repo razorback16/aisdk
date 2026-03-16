@@ -341,6 +341,11 @@ pub mod upstage;
 #[cfg(feature = "upstage")]
 pub use upstage::Upstage;
 
+#[cfg(feature = "vllm")]
+pub mod vllm;
+#[cfg(feature = "vllm")]
+pub use vllm::Vllm;
+
 #[cfg(feature = "vultr")]
 pub mod vultr;
 #[cfg(feature = "vultr")]
