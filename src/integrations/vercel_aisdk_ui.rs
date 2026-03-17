@@ -7,9 +7,7 @@ use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 #[cfg(feature = "language-model-request")]
-use std::collections::{HashMap, HashSet};
-#[cfg(feature = "language-model-request")]
-use std::sync::{Arc, Mutex};
+use std::collections::HashSet;
 #[cfg(feature = "language-model-request")]
 use uuid;
 
@@ -243,21 +241,20 @@ impl crate::core::StreamTextResponse {
             .map(|f| f())
             .unwrap_or_else(|| format!("msg_{}", uuid::Uuid::new_v4().simple()));
 
-        let seen_tool_call_ids = Arc::new(Mutex::new(HashSet::<String>::new()));
-        let tool_call_ids_by_name = Arc::new(Mutex::new(HashMap::<String, String>::new()));
+        let mut seen_tool_call_ids: HashSet<String> = HashSet::new();
 
         self.stream.flat_map(move |chunk| {
             let mut ui_chunks = Vec::new();
 
             match chunk {
-                LanguageModelStreamChunkType::Start if options.send_start => {
+                LanguageModelStreamChunkType::TextStart if options.send_start => {
                     ui_chunks.push(VercelUIStream::TextStart {
                         id: message_id.clone(),
                         provider_metadata: None,
                     });
                 }
 
-                LanguageModelStreamChunkType::Text(delta) => {
+                LanguageModelStreamChunkType::TextDelta(delta) => {
                     ui_chunks.push(VercelUIStream::TextDelta {
                         id: message_id.clone(),
                         delta,
@@ -265,7 +262,7 @@ impl crate::core::StreamTextResponse {
                     });
                 }
 
-                LanguageModelStreamChunkType::Reasoning(delta) if options.send_reasoning => {
+                LanguageModelStreamChunkType::ReasoningDelta(delta) if options.send_reasoning => {
                     ui_chunks.push(VercelUIStream::ReasoningDelta {
                         id: message_id.clone(),
                         delta,
@@ -273,95 +270,35 @@ impl crate::core::StreamTextResponse {
                     });
                 }
 
-                LanguageModelStreamChunkType::ToolCallDelta {
-                    tool_call_id,
-                    tool_name,
-                    delta,
-                } => {
-                    let is_new = seen_tool_call_ids
-                        .lock()
-                        .expect("tool call ids lock poisoned")
-                        .insert(tool_call_id.clone());
-
-                    tool_call_ids_by_name
-                        .lock()
-                        .expect("tool call ids by name lock poisoned")
-                        .insert(tool_name.clone(), tool_call_id.clone());
-
-                    if is_new {
-                        ui_chunks.push(VercelUIStream::ToolCallStart {
-                            id: message_id.clone(),
-                            tool_call_id: tool_call_id.clone(),
-                            tool_name: tool_name.clone(),
-                            provider_metadata: None,
-                        });
-                    }
-
+                LanguageModelStreamChunkType::ToolCallDelta { id, delta } => {
                     ui_chunks.push(VercelUIStream::ToolCallDelta {
                         id: message_id.clone(),
-                        tool_call_id,
+                        tool_call_id: id,
                         delta,
                         provider_metadata: None,
                     });
                 }
 
-                LanguageModelStreamChunkType::ToolCallStart(tool_info) => {
-                    if !tool_info.tool.id.is_empty() {
-                        let tool_call_id = tool_info.tool.id.clone();
-                        let tool_name = tool_info.tool.name.clone();
-
-                        let is_new = seen_tool_call_ids
-                            .lock()
-                            .expect("tool call ids lock poisoned")
-                            .insert(tool_call_id.clone());
-
-                        tool_call_ids_by_name
-                            .lock()
-                            .expect("tool call ids by name lock poisoned")
-                            .insert(tool_name.clone(), tool_call_id.clone());
-
+                LanguageModelStreamChunkType::ToolCallStart(tool_call) => {
+                    if !tool_call.id.is_empty() {
+                        let is_new = seen_tool_call_ids.insert(tool_call.id.clone());
                         if is_new {
                             ui_chunks.push(VercelUIStream::ToolCallStart {
                                 id: message_id.clone(),
-                                tool_call_id,
-                                tool_name,
+                                tool_call_id: tool_call.id,
+                                tool_name: tool_call.name,
                                 provider_metadata: None,
                             });
                         }
                     }
                 }
 
-                LanguageModelStreamChunkType::ToolResult(result_info) => {
-                    let tool_name = result_info.tool.name.clone();
-                    let mut tool_call_id = result_info.tool.id.clone();
-
-                    if tool_call_id.is_empty()
-                        && let Some(found_id) = tool_call_ids_by_name
-                            .lock()
-                            .expect("tool call ids by name lock poisoned")
-                            .get(&tool_name)
-                            .cloned()
-                    {
-                        tool_call_id = found_id;
-                    }
-
-                    if tool_call_id.is_empty() {
-                        tool_call_id = "unknown".to_string();
-                    }
-
-                    let is_new = seen_tool_call_ids
-                        .lock()
-                        .expect("tool call ids lock poisoned")
-                        .insert(tool_call_id.clone());
-
-                    if is_new {
-                        ui_chunks.push(VercelUIStream::ToolCallStart {
-                            id: message_id.clone(),
-                            tool_call_id: tool_call_id.clone(),
-                            tool_name,
-                            provider_metadata: None,
-                        });
-                    }
+                LanguageModelStreamChunkType::ToolCallEnd(result_info) => {
+                    let tool_call_id = if result_info.tool.id.is_empty() {
+                        "unknown".to_string()
+                    } else {
+                        result_info.tool.id.clone()
+                    };
 
                     let result = match result_info.output {
                         Ok(value) => value,
@@ -372,13 +309,6 @@ impl crate::core::StreamTextResponse {
                         id: message_id.clone(),
                         tool_call_id,
                         result,
-                        provider_metadata: None,
-                    });
-                }
-
-                LanguageModelStreamChunkType::End(_) if options.send_finish => {
-                    ui_chunks.push(VercelUIStream::TextEnd {
-                        id: message_id.clone(),
                         provider_metadata: None,
                     });
                 }

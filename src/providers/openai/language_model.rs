@@ -144,8 +144,7 @@ impl<M: ModelName> LanguageModel for OpenAI<M> {
                         if !arguments.is_empty() && state.tool_call_delta_seen.insert(item_id) {
                             chunks.push(LanguageModelStreamChunk::Delta(
                                 LanguageModelStreamChunkType::ToolCallDelta {
-                                    tool_call_id: call_id,
-                                    tool_name: name,
+                                    id: call_id,
                                     delta: arguments,
                                 },
                             ));
@@ -159,7 +158,7 @@ impl<M: ModelName> LanguageModel for OpenAI<M> {
                     ..
                 }) => {
                     state.tool_call_delta_seen.insert(item_id.clone());
-                    let (tool_call_id, tool_name) = state
+                    let (tool_call_id, _) = state
                         .tool_calls_by_item_id
                         .get(&item_id)
                         .cloned()
@@ -167,8 +166,7 @@ impl<M: ModelName> LanguageModel for OpenAI<M> {
 
                     Ok(vec![LanguageModelStreamChunk::Delta(
                         LanguageModelStreamChunkType::ToolCallDelta {
-                            tool_call_id,
-                            tool_name,
+                            id: tool_call_id,
                             delta,
                         },
                     )])
@@ -179,7 +177,7 @@ impl<M: ModelName> LanguageModel for OpenAI<M> {
                     ..
                 }) => {
                     if !arguments.is_empty() && state.tool_call_delta_seen.insert(item_id.clone()) {
-                        let (tool_call_id, tool_name) = state
+                        let (tool_call_id, _) = state
                             .tool_calls_by_item_id
                             .get(&item_id)
                             .cloned()
@@ -187,8 +185,7 @@ impl<M: ModelName> LanguageModel for OpenAI<M> {
 
                         Ok(vec![LanguageModelStreamChunk::Delta(
                             LanguageModelStreamChunkType::ToolCallDelta {
-                                tool_call_id,
-                                tool_name,
+                                id: tool_call_id,
                                 delta: arguments,
                             },
                         )])
@@ -198,13 +195,13 @@ impl<M: ModelName> LanguageModel for OpenAI<M> {
                 }
                 Ok(client::OpenAiStreamEvent::ResponseOutputTextDelta { delta, .. }) => {
                     Ok(vec![LanguageModelStreamChunk::Delta(
-                        LanguageModelStreamChunkType::Text(delta),
+                        LanguageModelStreamChunkType::TextDelta(delta),
                     )])
                 }
                 Ok(client::OpenAiStreamEvent::ResponseReasoningSummaryTextDelta {
                     delta, ..
                 }) => Ok(vec![LanguageModelStreamChunk::Delta(
-                    LanguageModelStreamChunkType::Reasoning(delta),
+                    LanguageModelStreamChunkType::ReasoningDelta(delta),
                 )]),
                 Ok(client::OpenAiStreamEvent::ResponseCompleted { response, .. }) => {
                     let mut result: Vec<LanguageModelStreamChunk> = Vec::new();

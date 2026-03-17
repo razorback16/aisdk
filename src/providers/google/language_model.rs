@@ -116,7 +116,7 @@ impl<M: ModelName> LanguageModel for Google<M> {
                             if let Some(t) = &part.text {
                                 state.accumulated_text.push_str(t);
                                 chunks.push(LanguageModelStreamChunk::Delta(
-                                    LanguageModelStreamChunkType::Text(t.clone()),
+                                    LanguageModelStreamChunkType::TextDelta(t.clone()),
                                 ));
                             }
                             if let Some(fc) = &part.function_call {
@@ -145,8 +145,7 @@ impl<M: ModelName> LanguageModel for Google<M> {
 
                                 chunks.push(LanguageModelStreamChunk::Delta(
                                     LanguageModelStreamChunkType::ToolCallDelta {
-                                        tool_call_id,
-                                        tool_name: fc.name.clone(),
+                                        id: tool_call_id,
                                         delta: serde_json::to_string(&fc.args).unwrap_or_default(),
                                     },
                                 ));

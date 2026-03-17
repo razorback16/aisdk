@@ -57,7 +57,7 @@ impl<M: LanguageModel> LanguageModelRequest<M> {
     ///            .stream;
     ///
     ///         while let Some(chunk) = stream.next().await {
-    ///             if let LanguageModelStreamChunkType::Text(text) = chunk {
+    ///             if let LanguageModelStreamChunkType::TextDelta(text) = chunk {
     ///                 println!("{}", text);
     ///             }
     ///         }
@@ -84,7 +84,7 @@ impl<M: LanguageModel> LanguageModelRequest<M> {
         }));
 
         let (tx, stream) = LanguageModelStream::new();
-        let _ = tx.send(LanguageModelStreamChunkType::Start);
+        let _ = tx.send(LanguageModelStreamChunkType::TextStart);
 
         let mut model = self.model.clone();
 
@@ -167,7 +167,7 @@ impl<M: LanguageModel> LanguageModelRequest<M> {
                                                 // Emit tool call info BEFORE execution
                                                 let _ = tx.send(
                                                     LanguageModelStreamChunkType::ToolCallStart(
-                                                        tool_info.clone(),
+                                                        tool_info.tool.clone(),
                                                     ),
                                                 );
                                                 options.handle_tool_call(tool_info).await;
@@ -178,7 +178,7 @@ impl<M: LanguageModel> LanguageModelRequest<M> {
                                                 }) = options.messages.last()
                                                 {
                                                     let _ = tx.send(
-                                                        LanguageModelStreamChunkType::ToolResult(
+                                                        LanguageModelStreamChunkType::ToolCallEnd(
                                                             result_info.clone(),
                                                         ),
                                                     );
@@ -207,8 +207,8 @@ impl<M: LanguageModel> LanguageModelRequest<M> {
                                     }
                                     LanguageModelStreamChunk::Delta(other) => match other {
                                         // Propagate text and reasoning chunks
-                                        LanguageModelStreamChunkType::Text(_)
-                                        | LanguageModelStreamChunkType::Reasoning(_)
+                                        LanguageModelStreamChunkType::TextDelta(_)
+                                        | LanguageModelStreamChunkType::ReasoningDelta(_)
                                         | LanguageModelStreamChunkType::ToolCallDelta { .. } => {
                                             let _ = tx.send(other.clone());
                                         }

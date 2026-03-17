@@ -154,9 +154,7 @@ impl<M: ModelName> LanguageModel for Anthropic<M> {
                     match evt_res {
                     Ok(event) => match event {
                         AnthropicStreamEvent::MessageStart { .. } => {
-                            Some(Ok(vec![LanguageModelStreamChunk::Delta(
-                                LanguageModelStreamChunkType::Start,
-                            )]))
+                                Some(Ok(unsupported("MessageStart")))
                         }
                         AnthropicStreamEvent::ContentBlockStart {
                             index,
@@ -205,7 +203,7 @@ impl<M: ModelName> LanguageModel for Anthropic<M> {
                                     ) => {
                                         text.push_str(&delta_text);
                                         Some(Ok(vec![LanguageModelStreamChunk::Delta(
-                                            LanguageModelStreamChunkType::Text(delta_text),
+                                            LanguageModelStreamChunkType::TextDelta(delta_text),
                                         )]))
                                     }
                                     (
@@ -214,7 +212,7 @@ impl<M: ModelName> LanguageModel for Anthropic<M> {
                                     ) => {
                                         thinking.push_str(&delta_thinking);
                                         Some(Ok(vec![LanguageModelStreamChunk::Delta(
-                                            LanguageModelStreamChunkType::Text(delta_thinking),
+                                            LanguageModelStreamChunkType::ReasoningDelta(delta_thinking),
                                         )]))
                                     }
                                     (
@@ -224,19 +222,18 @@ impl<M: ModelName> LanguageModel for Anthropic<M> {
                                         *signature = Some(delta_signature.clone());
                                         Some(Ok(unsupported("SignatureDelta")))
                                     }
-                                    (
+                                     (
                                         AccumulatedBlock::ToolUse {
                                             id,
-                                            name,
                                             accumulated_json,
+                                            ..
                                         },
                                         AnthropicDelta::ToolUseDelta { partial_json },
                                     ) => {
                                         accumulated_json.push_str(&partial_json);
                                         Some(Ok(vec![LanguageModelStreamChunk::Delta(
                                             LanguageModelStreamChunkType::ToolCallDelta {
-                                                tool_call_id: id.clone(),
-                                                tool_name: name.clone(),
+                                                id: id.clone(),
                                                 delta: partial_json,
                                             },
                                         )]))

@@ -13,7 +13,7 @@ pub mod request;
 pub mod stream_text;
 
 use crate::core::messages::{AssistantMessage, TaggedMessage, TaggedMessageHelpers};
-use crate::core::tools::ToolList;
+use crate::core::tools::{ToolDetails, ToolList};
 use crate::core::{
     Message,
     tools::{ToolCallInfo, ToolResultInfo},
@@ -501,28 +501,27 @@ impl LanguageModelResponse {
 /// Types of chunks that can be emitted during streaming text generation.
 #[derive(Default, Debug, Clone)]
 pub enum LanguageModelStreamChunkType {
-    /// Indicates the start of generation.
+    /// Text generation start.
     #[default]
-    Start,
+    TextStart,
     /// A chunk of generated text.
-    Text(String),
-    /// Reasoning summary text chunk (content delta only)
-    Reasoning(String),
+    TextDelta(String),
+    /// Reasoning summary text chunk.
+    ReasoningDelta(String),
+    /// Tool call start emitted before tool execution, contains details on the
+    /// tool call.
+    ToolCallStart(ToolDetails),
     /// Tool call argument chunk with metadata
     ToolCallDelta {
         /// Provider/tool-call unique identifier for correlating streamed deltas.
-        tool_call_id: String,
-        /// Tool name associated with this streamed argument delta.
-        tool_name: String,
+        id: String,
         /// Incremental argument JSON fragment.
         delta: String,
     },
-    /// Tool call info emitted before tool execution
-    ToolCallStart(ToolCallInfo),
-    /// Tool result emitted after tool execution
-    ToolResult(ToolResultInfo),
-    /// Successful completion of generation.
-    End(AssistantMessage),
+    /// Tool call end emitted after tool execution, contains the result of the\
+    /// tool call.
+    // NOTE: This event is emitted by the sdk after the tool call is done
+    ToolCallEnd(ToolResultInfo),
     /// Generation failed with an error message.
     Failed(String),
     /// Generation ended with an incomplete response.

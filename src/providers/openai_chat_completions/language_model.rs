@@ -94,7 +94,7 @@ impl<M: ModelName> LanguageModel for OpenAIChatCompletions<M> {
                         && !reasoning.is_empty()
                     {
                         results.push(LanguageModelStreamChunk::Delta(
-                            LanguageModelStreamChunkType::Reasoning(reasoning),
+                            LanguageModelStreamChunkType::ReasoningDelta(reasoning),
                         ));
                     }
 
@@ -103,7 +103,7 @@ impl<M: ModelName> LanguageModel for OpenAIChatCompletions<M> {
                         && !content.is_empty()
                     {
                         results.push(LanguageModelStreamChunk::Delta(
-                            LanguageModelStreamChunkType::Text(content),
+                            LanguageModelStreamChunkType::TextDelta(content),
                         ));
                     }
 
@@ -134,15 +134,9 @@ impl<M: ModelName> LanguageModel for OpenAIChatCompletions<M> {
                                     } else {
                                         entry.0.clone()
                                     };
-                                    let tool_name = if entry.1.is_empty() {
-                                        "unknown".to_string()
-                                    } else {
-                                        entry.1.clone()
-                                    };
                                     results.push(LanguageModelStreamChunk::Delta(
                                         LanguageModelStreamChunkType::ToolCallDelta {
-                                            tool_call_id,
-                                            tool_name,
+                                            id: tool_call_id,
                                             delta: args,
                                         },
                                     ));
