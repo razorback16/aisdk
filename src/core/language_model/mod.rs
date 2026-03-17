@@ -506,8 +506,14 @@ pub enum LanguageModelStreamChunkType {
     TextStart,
     /// A chunk of generated text.
     TextDelta(String),
+    /// Text generation end.
+    TextEnd,
+    /// Reasoning start emitted before reasoning.
+    ReasoningStart,
     /// Reasoning summary text chunk.
     ReasoningDelta(String),
+    /// Reasoning end emitted after reasoning.
+    ReasoningEnd,
     /// Tool call start emitted before tool execution, contains details on the
     /// tool call.
     ToolCallStart(ToolDetails),
