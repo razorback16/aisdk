@@ -23,6 +23,7 @@ fn get_username(user_id: String) -> Tool {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    dotenv::dotenv().ok();
     let args: Vec<String> = std::env::args().collect();
     let provider = args.get(1).map(String::as_str).unwrap_or("openai");
     #[cfg(any(feature = "openai", feature = "anthropic", feature = "google"))]
@@ -79,22 +80,15 @@ async fn run_openai(mode: &str) -> Result<(), Box<dyn std::error::Error>> {
         let mut stream = response.stream;
         while let Some(chunk) = stream.next().await {
             match chunk {
-                LanguageModelStreamChunkType::ToolCallDelta {
-                    tool_call_id,
-                    tool_name,
-                    delta,
-                } => {
-                    println!("ToolCallDelta id={tool_call_id} name={tool_name} delta={delta}");
+                LanguageModelStreamChunkType::ToolCallDelta { id, delta } => {
+                    println!("ToolCallDelta id={id} delta={delta}");
                 }
-                LanguageModelStreamChunkType::ToolCallStart(info) => {
-                    println!(
-                        "ToolCallStart id={} name={} input={}",
-                        info.tool.id, info.tool.name, info.input
-                    );
+                LanguageModelStreamChunkType::ToolCallStart(details) => {
+                    println!("ToolCallStart id={} name={}", details.id, details.name);
                 }
-                LanguageModelStreamChunkType::ToolResult(info) => {
+                LanguageModelStreamChunkType::ToolCallEnd(info) => {
                     println!(
-                        "ToolResult id={} name={} output={:?}",
+                        "ToolCallEnd id={} name={} output={:?}",
                         info.tool.id, info.tool.name, info.output
                     );
                 }
@@ -145,22 +139,15 @@ async fn run_anthropic(mode: &str) -> Result<(), Box<dyn std::error::Error>> {
         let mut stream = response.stream;
         while let Some(chunk) = stream.next().await {
             match chunk {
-                LanguageModelStreamChunkType::ToolCallDelta {
-                    tool_call_id,
-                    tool_name,
-                    delta,
-                } => {
-                    println!("ToolCallDelta id={tool_call_id} name={tool_name} delta={delta}");
+                LanguageModelStreamChunkType::ToolCallDelta { id, delta } => {
+                    println!("ToolCallDelta id={id} delta={delta}");
                 }
-                LanguageModelStreamChunkType::ToolCallStart(info) => {
-                    println!(
-                        "ToolCallStart id={} name={} input={}",
-                        info.tool.id, info.tool.name, info.input
-                    );
+                LanguageModelStreamChunkType::ToolCallStart(details) => {
+                    println!("ToolCallStart id={} name={}", details.id, details.name);
                 }
-                LanguageModelStreamChunkType::ToolResult(info) => {
+                LanguageModelStreamChunkType::ToolCallEnd(info) => {
                     println!(
-                        "ToolResult id={} name={} output={:?}",
+                        "ToolCallEnd id={} name={} output={:?}",
                         info.tool.id, info.tool.name, info.output
                     );
                 }
@@ -211,22 +198,15 @@ async fn run_google(mode: &str) -> Result<(), Box<dyn std::error::Error>> {
         let mut stream = response.stream;
         while let Some(chunk) = stream.next().await {
             match chunk {
-                LanguageModelStreamChunkType::ToolCallDelta {
-                    tool_call_id,
-                    tool_name,
-                    delta,
-                } => {
-                    println!("ToolCallDelta id={tool_call_id} name={tool_name} delta={delta}");
+                LanguageModelStreamChunkType::ToolCallDelta { id, delta } => {
+                    println!("ToolCallDelta id={id} delta={delta}");
                 }
-                LanguageModelStreamChunkType::ToolCallStart(info) => {
-                    println!(
-                        "ToolCallStart id={} name={} input={}",
-                        info.tool.id, info.tool.name, info.input
-                    );
+                LanguageModelStreamChunkType::ToolCallStart(details) => {
+                    println!("ToolCallStart id={} name={}", details.id, details.name);
                 }
-                LanguageModelStreamChunkType::ToolResult(info) => {
+                LanguageModelStreamChunkType::ToolCallEnd(info) => {
                     println!(
-                        "ToolResult id={} name={} output={:?}",
+                        "ToolCallEnd id={} name={} output={:?}",
                         info.tool.id, info.tool.name, info.output
                     );
                 }
