@@ -136,7 +136,7 @@ pub(crate) enum OpenAiStreamEvent {
         item_id: String,
         output_index: u32,
         content_index: u32,
-        delta: String,
+        text: String,
         logprobs: Option<Vec<LogProbs>>,
     },
 
