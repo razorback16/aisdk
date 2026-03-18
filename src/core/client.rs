@@ -303,7 +303,11 @@ pub(crate) trait LanguageModelClient {
             })?;
 
         // Map events to deserialized StreamEvent ( ProviderStreamEvent )
-        let mapped_stream = events_stream.map(|event_result| Self::parse_stream_sse(event_result));
+        // Filter out Event::Open (connection acknowledgement with no data) before parsing,
+        // so providers never receive a spurious NotSupported chunk as the first stream item.
+        let mapped_stream = events_stream
+            .filter(|e| futures::future::ready(!matches!(e, Ok(Event::Open))))
+            .map(|event_result| Self::parse_stream_sse(event_result));
 
         // State that indicates if the stream has ended
         let ended = std::sync::Arc::new(std::sync::Mutex::new(false));

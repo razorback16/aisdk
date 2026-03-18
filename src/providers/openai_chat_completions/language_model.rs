@@ -634,13 +634,15 @@ mod tests {
             .await
             .expect("stream request should succeed");
 
+        // Consume a chunk to ensure the request has been fully received by the mock server
+        // before we inspect the captured request.
         let first_item = tokio::time::timeout(Duration::from_secs(1), stream.next())
             .await
             .expect("stream should yield an event")
             .expect("stream should not end immediately")
             .expect("stream event should parse");
 
-        assert!(first_item.is_empty());
+        assert!(!first_item.is_empty());
 
         let request = request_handle
             .await
@@ -742,13 +744,15 @@ mod tests {
             .await
             .expect("stream request should succeed");
 
+        // Consume a chunk to ensure the request has been fully received by the mock server
+        // before we inspect the captured request.
         let first_item = tokio::time::timeout(Duration::from_secs(1), stream.next())
             .await
             .expect("stream should yield an event")
             .expect("stream should not end immediately")
             .expect("stream event should parse");
 
-        assert!(first_item.is_empty());
+        assert!(!first_item.is_empty());
 
         let request = request_handle
             .await
