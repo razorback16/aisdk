@@ -51,7 +51,7 @@ static HTTP_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
 #[allow(dead_code)]
 static HTTP_STREAMING_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
 
-// TODO: reasoning for two different clients is connection pooling is not
+// TODO: reasoning for two different clients in connection pooling is not
 // working during tests. make sure to fix this later.
 //
 /// Returns the shared HTTP client for non-streaming requests.
@@ -161,7 +161,8 @@ fn calculate_backoff(
 /// - Exponential backoff with configurable limits
 /// - Jitter to prevent thundering herd
 /// - Retry-After header parsing
-/// - Retryable error detection (429, 502, 503, 504)
+/// - Retryable HTTP status codes (429, 502, 503, 504)
+/// - Retryable transport errors (timeout, connection failure)
 /// - Request body reconstruction on each retry
 async fn retry_request<F, T>(
     url: reqwest::Url,
@@ -181,30 +182,37 @@ where
     loop {
         let body = body_fn();
 
-        let resp = client
+        let resp = match client
             .request(method.clone(), url.clone())
             .headers(headers.clone())
             .query(&query_params)
             .body(body)
             .send()
             .await
-            .map_err(|e| {
-                if e.is_timeout() || e.is_connect() {
-                    log::warn!(
-                        "Request failed with retryable error (attempt {}/{}): {}",
-                        retry_count + 1,
-                        config.max_retries + 1,
-                        e
-                    );
-                } else {
-                    log::error!("Request failed: {e}");
-                }
-
-                Error::ApiError {
+        {
+            Ok(r) => r,
+            // retry none HTTP-level errors (timeout, connection refused)
+            Err(e) if (e.is_timeout() || e.is_connect()) && retry_count < config.max_retries => {
+                let wait_time = calculate_backoff(retry_count, &config, None);
+                retry_count += 1;
+                log::warn!(
+                    "Request failed with retryable error (attempt {}/{}): {}. Retrying after {:?}...",
+                    retry_count,
+                    config.max_retries + 1,
+                    e,
+                    wait_time
+                );
+                tokio::time::sleep(wait_time).await;
+                continue;
+            }
+            Err(e) => {
+                log::error!("Request failed: {e}");
+                return Err(Error::ApiError {
                     status_code: e.status(),
                     details: e.to_string(),
-                }
-            })?;
+                });
+            }
+        };
 
         let status = resp.status();
         let response_headers = resp.headers().clone();
@@ -223,11 +231,10 @@ where
 
         // Check if error is retryable and we have retries left
         if is_retryable_status(status) && retry_count < config.max_retries {
-            retry_count += 1;
-
             // Parse Retry-After header if present
             let retry_after = parse_retry_after(&response_headers);
-            let wait_time = calculate_backoff(retry_count - 1, &config, retry_after);
+            let wait_time = calculate_backoff(retry_count, &config, retry_after);
+            retry_count += 1;
 
             log::warn!(
                 "Request failed with status {} (attempt {}/{}). Retrying after {:?}...",
