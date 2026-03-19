@@ -6,7 +6,11 @@ use crate::core::language_model::{
     LanguageModelStreamChunk, LanguageModelStreamChunkType, ProviderStream, Usage,
 };
 use crate::core::messages::AssistantMessage;
-use crate::providers::google::{Google, client::types, extensions};
+use crate::providers::google::{
+    Google,
+    client::{self, types},
+    extensions,
+};
 use crate::{
     core::{language_model::LanguageModel, tools::ToolCallInfo},
     error::Result,
@@ -24,14 +28,12 @@ impl<M: ModelName> LanguageModel for Google<M> {
         &mut self,
         options: LanguageModelOptions,
     ) -> Result<LanguageModelResponse> {
-        let additional_headers = options.headers.clone();
-        let request: types::GenerateContentRequest = options.into();
-        self.lm_options.request = Some(request);
-        self.lm_options.streaming = false;
+        let mut options: client::GoogleOptions = options.into();
+        options.model = self.lm_options.model.clone();
+        options.streaming = false;
+        self.lm_options = options;
 
-        let response: types::GenerateContentResponse = self
-            .send(&self.settings.base_url, additional_headers)
-            .await?;
+        let response: types::GenerateContentResponse = self.send(&self.settings.base_url).await?;
 
         let mut collected = Vec::new();
         let usage = response.usage_metadata.map(|u| u.into());
@@ -62,10 +64,10 @@ impl<M: ModelName> LanguageModel for Google<M> {
     }
 
     async fn stream_text(&mut self, options: LanguageModelOptions) -> Result<ProviderStream> {
-        let additional_headers = options.headers.clone();
-        let request: types::GenerateContentRequest = options.into();
-        self.lm_options.request = Some(request);
-        self.lm_options.streaming = true;
+        let mut options: client::GoogleOptions = options.into();
+        options.model = self.lm_options.model.clone();
+        options.streaming = true;
+        self.lm_options = options;
 
         // Retry logic for rate limiting
         let max_retries = 5;
@@ -73,10 +75,7 @@ impl<M: ModelName> LanguageModel for Google<M> {
         let mut wait_time = std::time::Duration::from_secs(1);
 
         let google_stream = loop {
-            match self
-                .send_and_stream(&self.settings.base_url, additional_headers.clone())
-                .await
-            {
+            match self.send_and_stream(&self.settings.base_url).await {
                 Ok(stream) => break stream,
                 Err(crate::error::Error::ApiError {
                     status_code: Some(status),
@@ -445,6 +444,59 @@ mod tests {
                 "x-trace-id".to_string(),
                 "trace-123".to_string(),
             )]))
+            .build()
+            .generate_text()
+            .await
+            .expect("request should succeed");
+
+        assert_eq!(response.text().as_deref(), Some("ok"));
+    }
+
+    #[tokio::test]
+    async fn test_generate_text_merges_provider_and_request_body_overrides() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/v1beta/models/gemini-1.5-flash:generateContent"))
+            .and(header("x-goog-api-key", "test-key"))
+            .and(body_partial_json(json!({
+                "contents": [
+                    {
+                        "role": "user",
+                        "parts": [{"text": "Hello"}]
+                    }
+                ],
+                "systemInstruction": {
+                    "role": "user",
+                    "parts": [{"text": "Use override"}]
+                },
+                "cachedContent": "cachedContents/test-cache"
+            })))
+            .respond_with(generate_content_response("ok"))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let mut model = test_model(server.uri());
+        model.settings.body = Some(
+            json!({
+                "cachedContent": "cachedContents/test-cache"
+            })
+            .as_object()
+            .expect("provider body should be an object")
+            .clone(),
+        );
+
+        let response = LanguageModelRequest::builder()
+            .model(model)
+            .system("You are helpful")
+            .messages(vec![Message::User("Hello".to_string().into())])
+            .body(json!({
+                "systemInstruction": {
+                    "role": "user",
+                    "parts": [{"text": "Use override"}]
+                }
+            }))
             .build()
             .generate_text()
             .await

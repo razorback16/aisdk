@@ -35,6 +35,8 @@ impl From<Tool> for types::ToolParams {
 
 impl From<LanguageModelOptions> for client::OpenAILanguageModelOptions {
     fn from(options: LanguageModelOptions) -> Self {
+        let extra_body = options.body.clone();
+        let extra_headers = options.headers.clone();
         let items: Vec<types::InputItem> = options
             .messages
             .into_iter()
@@ -75,6 +77,8 @@ impl From<LanguageModelOptions> for client::OpenAILanguageModelOptions {
             stream: Some(false),
             top_p: options.top_p.map(|t| t as f32 / 100.0),
             tools,
+            extra_body,
+            extra_headers,
         }
     }
 }
@@ -180,12 +184,16 @@ impl From<ReasoningEffort> for types::ReasoningEffort {
 
 impl From<EmbeddingModelOptions> for types::OpenAIEmbeddingOptions {
     fn from(value: EmbeddingModelOptions) -> Self {
+        let extra_body = value.body.clone();
+        let extra_headers = value.headers.clone();
         types::OpenAIEmbeddingOptions {
             input: value.input,
             model: "".to_string(), // will be set in mod.rs
             user: None,
             dimensions: value.dimensions,
             encoding_format: None,
+            extra_body,
+            extra_headers,
         }
     }
 }

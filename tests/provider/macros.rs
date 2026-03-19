@@ -56,9 +56,9 @@ macro_rules! generate_language_model_tests {
     ) => {
         use aisdk::core::tools::ToolExecute;
         use aisdk::core::{
+            DynamicModel, LanguageModelRequest, LanguageModelStreamChunkType, Message,
             language_model::{LanguageModel, LanguageModelResponseContentType, StopReason},
             tools::Tool,
-            DynamicModel, LanguageModelRequest, LanguageModelStreamChunkType, Message,
         };
         use aisdk::macros::tool;
         use dotenv::dotenv;
@@ -113,6 +113,47 @@ macro_rules! generate_provider_has_default_interface {
             assert_eq!(provider.settings.api_key, "test-api-key");
             assert_eq!(provider.settings.base_url, "http://localhost:8080/");
             assert_eq!(provider.settings.path, Some("/custom/path".to_string()));
+
+            let provider_with_body = $provider_type::<$model_struct>::builder()
+                .provider_name("test-provider-body".to_string())
+                .api_key("test-api-key")
+                .base_url("http://localhost:8080")
+                .body(serde_json::json!({
+                    "store": false
+                }))
+                .build()
+                .unwrap();
+
+            assert_eq!(
+                provider_with_body.settings.body,
+                Some(
+                    serde_json::json!({
+                        "store": false
+                    })
+                    .as_object()
+                    .expect("body should be an object")
+                    .clone()
+                )
+            );
+
+            let provider_with_headers = $provider_type::<$model_struct>::builder()
+                .provider_name("test-provider-headers".to_string())
+                .api_key("test-api-key")
+                .base_url("http://localhost:8080")
+                .headers(std::collections::HashMap::from([(
+                    "x-trace-id".to_string(),
+                    "trace-123".to_string(),
+                )]))
+                .build()
+                .unwrap();
+
+            assert_eq!(
+                provider_with_headers.settings.headers,
+                Some(std::collections::HashMap::from([(
+                    "x-trace-id".to_string(),
+                    "trace-123".to_string(),
+                )]))
+            );
 
             // should fail on invalid base url
             let provider2 = $provider_type::<$model_struct>::builder()

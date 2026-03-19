@@ -3,7 +3,7 @@
 use crate::{
     core::{
         capabilities::ModelName,
-        client::EmbeddingClient,
+        client::{EmbeddingClient, merge_body, merge_headers},
         embedding_model::{EmbeddingModel, EmbeddingModelOptions, EmbeddingModelResponse},
     },
     error::Result,
@@ -25,7 +25,7 @@ impl<M: ModelName> EmbeddingClient for OpenAIChatCompletions<M> {
         reqwest::Method::POST
     }
 
-    fn headers(&self) -> reqwest::header::HeaderMap {
+    fn headers(&self) -> Result<reqwest::header::HeaderMap> {
         let mut headers = reqwest::header::HeaderMap::new();
         headers.insert(
             reqwest::header::CONTENT_TYPE,
@@ -35,34 +35,37 @@ impl<M: ModelName> EmbeddingClient for OpenAIChatCompletions<M> {
             reqwest::header::AUTHORIZATION,
             format!("Bearer {}", self.settings.api_key).parse().unwrap(),
         );
-        headers
+        merge_headers(headers, self.settings.headers.as_ref(), None)
     }
 
     fn query_params(&self) -> Vec<(&str, &str)> {
         Vec::new()
     }
 
-    fn body(&self) -> reqwest::Body {
+    fn body(&self) -> Result<reqwest::Body> {
         // This will be set when embedding is called
-        reqwest::Body::from("") // Placeholder, will be replaced
+        Ok(reqwest::Body::from("")) // Placeholder, will be replaced
     }
 }
 
 impl<M: ModelName> OpenAIChatCompletions<M> {
     /// Creates an embedding request body from options.
     fn create_embedding_body(&self, input: EmbeddingModelOptions) -> Result<EmbeddingOptions> {
+        let extra_body = input.body.clone();
+        let extra_headers = input.headers.clone();
         Ok(EmbeddingOptions {
             input: input.input,
             model: self.options.model.clone(),
             user: None,
             dimensions: input.dimensions,
             encoding_format: None,
+            extra_body,
+            extra_headers,
         })
     }
 
     /// Embeds the given input using the OpenAI Embeddings API.
     pub async fn embed(&self, input: EmbeddingModelOptions) -> Result<EmbeddingModelResponse> {
-        let headers = input.headers.clone();
         let embedding_options = self.create_embedding_body(input)?;
 
         // Create a temporary client instance for this request
@@ -71,9 +74,7 @@ impl<M: ModelName> OpenAIChatCompletions<M> {
             options: embedding_options,
         };
 
-        let response = embedding_client
-            .send(&self.settings.base_url, headers)
-            .await?;
+        let response = embedding_client.send(&self.settings.base_url).await?;
 
         // Extract embeddings from response
         Ok(response.data.into_iter().map(|e| e.embedding).collect())
@@ -97,7 +98,7 @@ impl EmbeddingClient for EmbeddingClientWrapper {
         reqwest::Method::POST
     }
 
-    fn headers(&self) -> reqwest::header::HeaderMap {
+    fn headers(&self) -> Result<reqwest::header::HeaderMap> {
         let mut headers = reqwest::header::HeaderMap::new();
         headers.insert(
             reqwest::header::CONTENT_TYPE,
@@ -107,16 +108,23 @@ impl EmbeddingClient for EmbeddingClientWrapper {
             reqwest::header::AUTHORIZATION,
             format!("Bearer {}", self.settings.api_key).parse().unwrap(),
         );
-        headers
+        merge_headers(
+            headers,
+            self.settings.headers.as_ref(),
+            self.options.extra_headers.as_ref(),
+        )
     }
 
     fn query_params(&self) -> Vec<(&str, &str)> {
         Vec::new()
     }
 
-    fn body(&self) -> reqwest::Body {
-        let body = serde_json::to_string(&self.options).unwrap();
-        reqwest::Body::from(body)
+    fn body(&self) -> Result<reqwest::Body> {
+        merge_body(
+            &self.options,
+            self.settings.body.as_ref(),
+            self.options.extra_body.as_ref(),
+        )
     }
 }
 
@@ -223,6 +231,52 @@ mod tests {
             .model(test_model(server.uri()))
             .input(vec!["hello".to_string()])
             .dimensions(64)
+            .build()
+            .embed()
+            .await
+            .expect("embedding request should succeed");
+
+        assert_eq!(response.len(), 2);
+        assert_eq!(response[0], vec![0.1, 0.2]);
+    }
+
+    #[tokio::test]
+    async fn test_embed_merges_provider_and_request_body_overrides() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/embeddings"))
+            .and(header("authorization", "Bearer test-key"))
+            .and(body_partial_json(json!({
+                "model": "text-embedding-3-small",
+                "input": ["hello"],
+                "dimensions": 128,
+                "encoding_format": "base64",
+                "user": "provider-user"
+            })))
+            .respond_with(embedding_response())
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let mut model = test_model(server.uri());
+        model.settings.body = Some(
+            json!({
+                "user": "provider-user"
+            })
+            .as_object()
+            .expect("provider body should be an object")
+            .clone(),
+        );
+
+        let response = EmbeddingModelRequest::builder()
+            .model(model)
+            .input(vec!["hello".to_string()])
+            .dimensions(64)
+            .body(json!({
+                "dimensions": 128,
+                "encoding_format": "base64"
+            }))
             .build()
             .embed()
             .await

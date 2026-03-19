@@ -105,6 +105,7 @@ impl<M: EmbeddingModel> EmbeddingModelRequestBuilder<M> {
                 .input(vec![])
                 .dimensions(None)
                 .headers(None)
+                .body(None)
                 .build()
                 .unwrap(),
             state: std::marker::PhantomData,
@@ -184,6 +185,25 @@ impl<M: EmbeddingModel> EmbeddingModelRequestBuilder<M, OptionsStage> {
         self
     }
 
+    /// Sets extra fields to merge into the provider's request body.
+    ///
+    /// These fields are merged at the top level of the JSON body,
+    /// allowing provider-specific options without modifying the SDK.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// .body(serde_json::json!({
+    ///     "user": "embed-test"
+    /// }))
+    /// ```
+    pub fn body(mut self, body: serde_json::Value) -> Self {
+        if let serde_json::Value::Object(map) = body {
+            self.options.body = Some(map);
+        }
+        self
+    }
+
     /// Builds the `EmbeddingModelRequest`.
     ///
     /// This method consumes the builder and returns the configured request.
@@ -200,5 +220,44 @@ impl<M: EmbeddingModel> EmbeddingModelRequestBuilder<M, OptionsStage> {
             model,
             options: self.options,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use async_trait::async_trait;
+
+    #[derive(Debug, Clone)]
+    struct TestEmbeddingModel;
+
+    #[async_trait]
+    impl EmbeddingModel for TestEmbeddingModel {
+        async fn embed(&self, _input: EmbeddingModelOptions) -> Result<EmbeddingModelResponse> {
+            Ok(vec![])
+        }
+    }
+
+    #[test]
+    fn test_embedding_request_builder_accepts_body_object() {
+        let request = EmbeddingModelRequest::builder()
+            .model(TestEmbeddingModel)
+            .input(vec!["hello".to_string()])
+            .body(serde_json::json!({
+                "user": "embed-test"
+            }))
+            .build();
+
+        assert_eq!(
+            request.options.body,
+            Some(
+                serde_json::json!({
+                    "user": "embed-test"
+                })
+                .as_object()
+                .expect("body should be an object")
+                .clone()
+            )
+        );
     }
 }

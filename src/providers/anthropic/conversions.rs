@@ -10,6 +10,8 @@ use crate::providers::anthropic::extensions;
 
 impl From<LanguageModelOptions> for AnthropicOptions {
     fn from(options: LanguageModelOptions) -> Self {
+        let extra_body = options.body.clone();
+        let extra_headers = options.headers.clone();
         let mut messages = Vec::new();
         let mut request = AnthropicOptions::builder();
         request.model("");
@@ -143,7 +145,10 @@ impl From<LanguageModelOptions> for AnthropicOptions {
             },
         }));
 
-        request.build().expect("Failed to build AntropicRequest")
+        let mut request = request.build().expect("Failed to build AntropicRequest");
+        request.extra_body = extra_body;
+        request.extra_headers = extra_headers;
+        request
     }
 }
 

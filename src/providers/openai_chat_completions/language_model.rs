@@ -24,14 +24,11 @@ impl<M: ModelName> LanguageModel for OpenAIChatCompletions<M> {
         &mut self,
         options: LanguageModelOptions,
     ) -> Result<LanguageModelResponse> {
-        let additional_headers = options.headers.clone();
         let mut options: client::ChatCompletionsOptions = options.into();
         options.model = self.options.model.clone();
         self.options = options;
 
-        let response: types::ChatCompletionsResponse = self
-            .send(&self.settings.base_url, additional_headers)
-            .await?;
+        let response: types::ChatCompletionsResponse = self.send(&self.settings.base_url).await?;
 
         // Convert choices to LanguageModelResponse
         let mut contents = Vec::new();
@@ -65,7 +62,6 @@ impl<M: ModelName> LanguageModel for OpenAIChatCompletions<M> {
     }
 
     async fn stream_text(&mut self, options: LanguageModelOptions) -> Result<ProviderStream> {
-        let additional_headers = options.headers.clone();
         let mut options: client::ChatCompletionsOptions = options.into();
         options.model = self.options.model.clone();
         options.stream = Some(true);
@@ -75,9 +71,7 @@ impl<M: ModelName> LanguageModel for OpenAIChatCompletions<M> {
         // open ai compatible providers
         self.options = options;
 
-        let stream = self
-            .send_and_stream(&self.settings.base_url, additional_headers)
-            .await?;
+        let stream = self.send_and_stream(&self.settings.base_url).await?;
 
         // State for accumulating tool calls across chunks
         use std::collections::HashMap;
@@ -496,6 +490,51 @@ mod tests {
                 "x-trace-id".to_string(),
                 "trace-123".to_string(),
             )]))
+            .build()
+            .generate_text()
+            .await
+            .expect("request should succeed");
+
+        assert_eq!(response.text().as_deref(), Some("ok"));
+    }
+
+    #[tokio::test]
+    async fn test_generate_text_merges_provider_and_request_body_overrides() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .and(header("authorization", "Bearer test-key"))
+            .and(body_partial_json(json!({
+                "model": "gpt-4o-mini",
+                "messages": [
+                    { "role": "user", "content": "Hello" }
+                ],
+                "temperature": 0.9,
+                "service_tier": "flex"
+            })))
+            .respond_with(chat_completion_response("ok"))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let mut model = test_model(server.uri());
+        model.settings.body = Some(
+            json!({
+                "service_tier": "flex"
+            })
+            .as_object()
+            .expect("provider body should be an object")
+            .clone(),
+        );
+
+        let response = LanguageModelRequest::builder()
+            .model(model)
+            .messages(vec![Message::User("Hello".to_string().into())])
+            .temperature(60u32)
+            .body(json!({
+                "temperature": 0.9
+            }))
             .build()
             .generate_text()
             .await

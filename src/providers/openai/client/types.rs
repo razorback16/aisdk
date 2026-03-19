@@ -30,6 +30,12 @@ pub(crate) struct OpenAILanguageModelOptions {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[builder(default)]
     pub(crate) tools: Option<Vec<ToolParams>>,
+    #[serde(skip)]
+    #[builder(default)]
+    pub(crate) extra_body: Option<serde_json::Map<String, serde_json::Value>>,
+    #[serde(skip)]
+    #[builder(default)]
+    pub(crate) extra_headers: Option<std::collections::HashMap<String, String>>,
 }
 
 /// Response structure from the OpenAI API.
@@ -448,4 +454,10 @@ pub(crate) struct OpenAIEmbeddingOptions {
     pub dimensions: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub encoding_format: Option<String>,
+    #[serde(skip)]
+    #[builder(default)]
+    pub(crate) extra_body: Option<serde_json::Map<String, serde_json::Value>>,
+    #[serde(skip)]
+    #[builder(default)]
+    pub(crate) extra_headers: Option<std::collections::HashMap<String, String>>,
 }

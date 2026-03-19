@@ -28,16 +28,13 @@ impl<M: ModelName> LanguageModel for OpenAI<M> {
         &mut self,
         options: LanguageModelOptions,
     ) -> Result<LanguageModelResponse> {
-        let additional_headers = options.headers.clone();
         let mut options: OpenAILanguageModelOptions = options.into();
 
         options.model = self.lm_options.model.clone();
 
         self.lm_options = options;
 
-        let response: client::OpenAIResponse = self
-            .send(&self.settings.base_url, additional_headers)
-            .await?;
+        let response: client::OpenAIResponse = self.send(&self.settings.base_url).await?;
 
         let mut collected: Vec<LanguageModelResponseContentType> = Vec::new();
 
@@ -73,7 +70,6 @@ impl<M: ModelName> LanguageModel for OpenAI<M> {
 
     /// Streams text using the OpenAI provider.
     async fn stream_text(&mut self, options: LanguageModelOptions) -> Result<ProviderStream> {
-        let additional_headers = options.headers.clone();
         let mut options: OpenAILanguageModelOptions = options.into();
 
         options.model = self.lm_options.model.to_string();
@@ -87,10 +83,7 @@ impl<M: ModelName> LanguageModel for OpenAI<M> {
         let mut wait_time = std::time::Duration::from_secs(1);
 
         let openai_stream = loop {
-            match self
-                .send_and_stream(&self.settings.base_url, additional_headers.clone())
-                .await
-            {
+            match self.send_and_stream(&self.settings.base_url).await {
                 Ok(stream) => break stream,
                 Err(crate::error::Error::ApiError {
                     status_code: Some(status),
@@ -521,6 +514,60 @@ mod tests {
                 "x-trace-id".to_string(),
                 "trace-123".to_string(),
             )]))
+            .build()
+            .generate_text()
+            .await
+            .expect("request should succeed");
+
+        assert_eq!(response.text().as_deref(), Some("ok"));
+    }
+
+    #[tokio::test]
+    async fn test_generate_text_merges_provider_and_request_body_overrides() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/v1/responses"))
+            .and(header("authorization", "Bearer test-key"))
+            .and(body_partial_json(json!({
+                "model": "gpt-4o-mini",
+                "input": [
+                    {
+                        "role": "user",
+                        "type": "message",
+                        "content": [
+                            {
+                                "type": "input_text",
+                                "text": "Hello"
+                            }
+                        ]
+                    }
+                ],
+                "temperature": 0.9,
+                "store": false
+            })))
+            .respond_with(responses_api_response("ok"))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let mut model = test_model(server.uri());
+        model.settings.body = Some(
+            json!({
+                "store": false
+            })
+            .as_object()
+            .expect("provider body should be an object")
+            .clone(),
+        );
+
+        let response = LanguageModelRequest::builder()
+            .model(model)
+            .messages(vec![Message::User("Hello".to_string().into())])
+            .temperature(60u32)
+            .body(json!({
+                "temperature": 0.9
+            }))
             .build()
             .generate_text()
             .await
