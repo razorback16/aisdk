@@ -165,4 +165,60 @@ mod tests {
         assert_eq!(response.len(), 2);
         assert_eq!(response[0], vec![0.1, 0.2]);
     }
+
+    #[tokio::test]
+    async fn test_embed_merges_provider_and_request_body_overrides() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/v1beta/models/text-embedding-004:batchEmbedContents"))
+            .and(header("x-goog-api-key", "test-key"))
+            .and(body_partial_json(json!({
+                "requests": [
+                    {
+                        "model": "models/text-embedding-004",
+                        "content": {
+                            "role": "user",
+                            "parts": [{"text": "hello"}]
+                        },
+                        "outputDimensionality": 64
+                    }
+                ],
+                "autoTruncate": true,
+                "requestMetadata": {
+                    "traceId": "embed-123"
+                }
+            })))
+            .respond_with(embedding_response())
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let mut model = test_model(server.uri());
+        model.settings.body = Some(
+            json!({
+                "requestMetadata": {
+                    "traceId": "embed-123"
+                }
+            })
+            .as_object()
+            .expect("provider body should be an object")
+            .clone(),
+        );
+
+        let response = EmbeddingModelRequest::builder()
+            .model(model)
+            .input(vec!["hello".to_string()])
+            .dimensions(64)
+            .body(json!({
+                "autoTruncate": true
+            }))
+            .build()
+            .embed()
+            .await
+            .expect("embedding request should succeed");
+
+        assert_eq!(response.len(), 2);
+        assert_eq!(response[0], vec![0.1, 0.2]);
+    }
 }

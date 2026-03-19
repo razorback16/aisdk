@@ -127,9 +127,10 @@ impl<M: ModelName> EmbeddingClient for OpenAI<M> {
     }
 
     fn body(&self) -> crate::error::Result<reqwest::Body> {
-        let body = serde_json::to_vec(&self.embedding_options).map_err(|e| {
-            Error::Other(format!("Failed to serialize embedding request body: {e}"))
-        })?;
-        Ok(reqwest::Body::from(body))
+        merge_body(
+            &self.embedding_options,
+            self.settings.body.as_ref(),
+            self.embedding_options.extra_body.as_ref(),
+        )
     }
 }

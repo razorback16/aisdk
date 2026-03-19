@@ -353,6 +353,8 @@ pub(crate) struct EmbeddingOptions {
     /// The format to return embeddings in (default: "float").
     #[serde(skip_serializing_if = "Option::is_none")]
     pub encoding_format: Option<String>,
+    #[serde(skip)]
+    pub extra_body: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
 /// A single embedding vector.

@@ -451,4 +451,7 @@ pub(crate) struct OpenAIEmbeddingOptions {
     pub dimensions: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub encoding_format: Option<String>,
+    #[serde(skip)]
+    #[builder(default)]
+    pub(crate) extra_body: Option<serde_json::Map<String, serde_json::Value>>,
 }

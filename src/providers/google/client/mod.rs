@@ -35,6 +35,9 @@ impl GoogleOptions {
 pub(crate) struct GoogleEmbeddingOptions {
     pub(crate) model: String,
     pub(crate) requests: Vec<types::EmbedContentRequest>,
+    #[serde(skip)]
+    #[builder(default)]
+    pub(crate) extra_body: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
 impl<M: ModelName> LanguageModelClient for Google<M> {
@@ -161,9 +164,10 @@ impl<M: ModelName> EmbeddingClient for Google<M> {
         let request = types::BatchEmbedContentsRequest {
             requests: self.embedding_options.requests.clone(),
         };
-        let body = serde_json::to_vec(&request).map_err(|e| {
-            Error::Other(format!("Failed to serialize embedding request body: {e}"))
-        })?;
-        Ok(reqwest::Body::from(body))
+        merge_body(
+            &request,
+            self.settings.body.as_ref(),
+            self.embedding_options.extra_body.as_ref(),
+        )
     }
 }

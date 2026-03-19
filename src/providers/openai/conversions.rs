@@ -182,12 +182,14 @@ impl From<ReasoningEffort> for types::ReasoningEffort {
 
 impl From<EmbeddingModelOptions> for types::OpenAIEmbeddingOptions {
     fn from(value: EmbeddingModelOptions) -> Self {
+        let extra_body = value.body.clone();
         types::OpenAIEmbeddingOptions {
             input: value.input,
             model: "".to_string(), // will be set in mod.rs
             user: None,
             dimensions: value.dimensions,
             encoding_format: None,
+            extra_body,
         }
     }
 }

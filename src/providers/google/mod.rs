@@ -63,6 +63,7 @@ impl Google<DynamicModel> {
         let embedding_options = GoogleEmbeddingOptions {
             model: model_name.clone(),
             requests: Vec::new(),
+            extra_body: None,
         };
 
         Self {
@@ -85,6 +86,7 @@ impl<M: ModelName> Default for Google<M> {
         let embedding_options = GoogleEmbeddingOptions {
             model: M::MODEL_NAME.to_string(),
             requests: Vec::new(),
+            extra_body: None,
         };
 
         Self {
@@ -189,6 +191,7 @@ impl<M: ModelName> GoogleBuilder<M> {
         let embedding_options = GoogleEmbeddingOptions {
             model: model_name,
             requests: Vec::new(),
+            extra_body: None,
         };
 
         Ok(Google {

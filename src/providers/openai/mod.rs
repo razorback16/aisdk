@@ -48,6 +48,7 @@ impl<M: ModelName> Default for OpenAI<M> {
             user: None,
             dimensions: None,
             encoding_format: None,
+            extra_body: None,
         };
 
         Self {
@@ -92,6 +93,7 @@ impl OpenAI<DynamicModel> {
             user: None,
             dimensions: None,
             encoding_format: None,
+            extra_body: None,
         };
 
         OpenAI {
@@ -233,6 +235,7 @@ impl<M: ModelName> OpenAIBuilder<M> {
             user: None,
             dimensions: None,
             encoding_format: None,
+            extra_body: None,
         };
 
         Ok(OpenAI {

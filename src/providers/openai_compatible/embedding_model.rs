@@ -31,6 +31,7 @@ impl<M: ModelName> EmbeddingModel for OpenAICompatible<M> {
                 user: None,
                 dimensions: input.dimensions,
                 encoding_format: None,
+                extra_body: None,
             },
             _phantom: std::marker::PhantomData,
         };

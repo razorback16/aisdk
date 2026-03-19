@@ -149,4 +149,50 @@ mod tests {
         assert_eq!(response.len(), 2);
         assert_eq!(response[0], vec![0.1, 0.2]);
     }
+
+    #[tokio::test]
+    async fn test_embed_merges_provider_and_request_body_overrides() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/v1/embeddings"))
+            .and(header("authorization", "Bearer test-key"))
+            .and(body_partial_json(json!({
+                "model": "text-embedding-3-small",
+                "input": ["hello"],
+                "dimensions": 128,
+                "encoding_format": "base64",
+                "user": "provider-user"
+            })))
+            .respond_with(embedding_response())
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let mut model = test_model(server.uri());
+        model.settings.body = Some(
+            json!({
+                "user": "provider-user"
+            })
+            .as_object()
+            .expect("provider body should be an object")
+            .clone(),
+        );
+
+        let response = EmbeddingModelRequest::builder()
+            .model(model)
+            .input(vec!["hello".to_string()])
+            .dimensions(64)
+            .body(json!({
+                "dimensions": 128,
+                "encoding_format": "base64"
+            }))
+            .build()
+            .embed()
+            .await
+            .expect("embedding request should succeed");
+
+        assert_eq!(response.len(), 2);
+        assert_eq!(response[0], vec![0.1, 0.2]);
+    }
 }

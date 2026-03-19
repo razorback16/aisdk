@@ -193,6 +193,7 @@ impl From<types::UsageMetadata> for Usage {
 
 impl From<EmbeddingModelOptions> for GoogleEmbeddingOptions {
     fn from(value: EmbeddingModelOptions) -> Self {
+        let extra_body = value.body.clone();
         let requests = value
             .input
             .into_iter()
@@ -214,6 +215,7 @@ impl From<EmbeddingModelOptions> for GoogleEmbeddingOptions {
         GoogleEmbeddingOptions {
             model: String::new(), // will be set in embedding_model.rs
             requests,
+            extra_body,
         }
     }
 }

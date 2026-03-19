@@ -217,8 +217,10 @@ pub(crate) fn merge_body<T>(
 where
     T: Serialize,
 {
-    let mut json = serde_json::to_value(request)
+    let body_bytes = serde_json::to_vec(request)
         .map_err(|e| Error::Other(format!("Failed to serialize request body: {e}")))?;
+    let mut json: serde_json::Value = serde_json::from_slice(&body_bytes)
+        .map_err(|e| Error::Other(format!("Failed to parse request body as JSON: {e}")))?;
 
     let map = json
         .as_object_mut()
