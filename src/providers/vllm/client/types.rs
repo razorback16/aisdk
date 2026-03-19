@@ -93,3 +93,20 @@ pub(crate) enum VllmStreamEvent {
     Error(String),
     Open,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_deserialize_usage_only_chunk() {
+        let json = r#"{"id":"chatcmpl-af39d78a86c24247","object":"chat.completion.chunk","created":1773898751,"model":"Qwen3.5-122B-A10B-NVFP4","choices":[],"usage":{"prompt_tokens":12,"total_tokens":17,"completion_tokens":5}}"#;
+        let chunk: VllmChatCompletionsStreamChunk = serde_json::from_str(json).unwrap();
+        assert!(chunk.choices.is_empty());
+        assert!(chunk.usage.is_some());
+        let usage = chunk.usage.unwrap();
+        assert_eq!(usage.prompt_tokens, 12);
+        assert_eq!(usage.completion_tokens, 5);
+        assert_eq!(usage.total_tokens, 17);
+    }
+}

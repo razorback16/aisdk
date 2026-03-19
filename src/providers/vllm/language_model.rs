@@ -14,6 +14,7 @@ use crate::core::messages::AssistantMessage;
 use crate::core::tools::ToolCallInfo;
 use crate::error::Result;
 use crate::providers::openai_chat_completions::client::ChatCompletionsOptions;
+use crate::providers::openai_chat_completions::client::types::StreamOptions;
 use crate::providers::vllm::Vllm;
 use crate::providers::vllm::client::types;
 use crate::providers::vllm::settings::VllmSettings;
@@ -100,6 +101,10 @@ impl<M: ModelName> LanguageModel for Vllm<M> {
         let mut opts: ChatCompletionsOptions = options.into();
         opts.model = self.inner.options.model.clone();
         opts.stream = Some(true);
+        opts.stream_options = Some(StreamOptions {
+            include_usage: Some(true),
+            include_obfuscation: None,
+        });
         self.inner.options = opts;
 
         let stream = self
@@ -110,12 +115,37 @@ impl<M: ModelName> LanguageModel for Vllm<M> {
         use std::collections::HashMap;
         let mut accumulated_tool_calls: HashMap<u32, (String, String, String)> = HashMap::new();
 
-        // Map stream events to SDK stream chunks
+        // Buffer pending Done messages so we can attach usage from vllm's
+        // separate usage-only chunk (choices=[], usage={...}) that arrives
+        // after the finish_reason chunk.
+        let mut pending_done: Vec<AssistantMessage> = Vec::new();
+
         let stream = stream.map(move |evt_res| match evt_res {
             Ok(types::VllmStreamEvent::Chunk(chunk)) => {
                 let mut results = Vec::new();
 
-                for choice in chunk.choices {
+                let types::VllmChatCompletionsStreamChunk { choices, usage, .. } = chunk;
+
+                // Usage-only chunk: vllm sends this after the finish_reason
+                // chunk when stream_options.include_usage is set.
+                if choices.is_empty() {
+                    if let Some(usage) = usage {
+                        let usage: crate::core::language_model::Usage = usage.into();
+                        // Flush pending Done messages with usage attached
+                        for mut msg in pending_done.drain(..) {
+                            msg.usage = Some(usage.clone());
+                            results.push(LanguageModelStreamChunk::Done(msg));
+                        }
+                    } else {
+                        // Empty choices, no usage — flush pending without usage
+                        for msg in pending_done.drain(..) {
+                            results.push(LanguageModelStreamChunk::Done(msg));
+                        }
+                    }
+                    return Ok(results);
+                }
+
+                for choice in choices {
                     // Reasoning delta (vLLM uses "reasoning" field)
                     if let Some(reasoning) = choice.delta.reasoning
                         && !reasoning.is_empty()
@@ -179,17 +209,18 @@ impl<M: ModelName> LanguageModel for Vllm<M> {
                     }
 
                     if let Some(finish_reason) = choice.finish_reason {
-                        let usage = chunk.usage.clone().map(|u| u.into());
+                        let usage = usage.as_ref().map(|u| u.clone().into());
 
                         match finish_reason.as_str() {
                             "stop" | "length" => {
-                                results.push(LanguageModelStreamChunk::Done(AssistantMessage {
+                                // Buffer Done — usage will be attached from the
+                                // usage-only chunk that follows.
+                                pending_done.push(AssistantMessage {
                                     content: LanguageModelResponseContentType::Text(String::new()),
                                     usage,
-                                }));
+                                });
                             }
                             "tool_calls" | "function_call" => {
-                                // Send accumulated tool calls
                                 for (index, (id, name, args)) in &accumulated_tool_calls {
                                     let resolved_id = if id.is_empty() {
                                         format!("vllm-tool-call-{index}")
@@ -207,33 +238,30 @@ impl<M: ModelName> LanguageModel for Vllm<M> {
                                     tool_info.input(serde_json::from_str(args).unwrap_or_else(
                                         |_| serde_json::Value::Object(serde_json::Map::new()),
                                     ));
-                                    results.push(LanguageModelStreamChunk::Done(
-                                        AssistantMessage {
-                                            content: LanguageModelResponseContentType::ToolCall(
-                                                tool_info,
-                                            ),
-                                            usage: usage.clone(),
-                                        },
-                                    ));
+                                    pending_done.push(AssistantMessage {
+                                        content: LanguageModelResponseContentType::ToolCall(
+                                            tool_info,
+                                        ),
+                                        usage: usage.clone(),
+                                    });
                                 }
                             }
                             "content_filter" => {
-                                results.push(LanguageModelStreamChunk::Done(AssistantMessage {
+                                pending_done.push(AssistantMessage {
                                     content: LanguageModelResponseContentType::Text(String::new()),
                                     usage,
-                                }));
+                                });
                                 results.push(LanguageModelStreamChunk::Delta(
                                     LanguageModelStreamChunkType::Failed(
                                         "Content filtered".to_string(),
                                     ),
                                 ));
                             }
-                            // For any unknown finish reason, treat as normal completion
                             _ => {
-                                results.push(LanguageModelStreamChunk::Done(AssistantMessage {
+                                pending_done.push(AssistantMessage {
                                     content: LanguageModelResponseContentType::Text(String::new()),
                                     usage,
-                                }));
+                                });
                             }
                         }
                     }
@@ -242,7 +270,14 @@ impl<M: ModelName> LanguageModel for Vllm<M> {
                 Ok(results)
             }
             Ok(types::VllmStreamEvent::Open) => Ok(vec![]),
-            Ok(types::VllmStreamEvent::Done) => Ok(vec![]),
+            Ok(types::VllmStreamEvent::Done) => {
+                // Stream ended — flush any pending Done messages without usage
+                let mut results = Vec::new();
+                for msg in pending_done.drain(..) {
+                    results.push(LanguageModelStreamChunk::Done(msg));
+                }
+                Ok(results)
+            }
             Ok(types::VllmStreamEvent::Error(e)) => Ok(vec![LanguageModelStreamChunk::Delta(
                 LanguageModelStreamChunkType::Failed(e),
             )]),
