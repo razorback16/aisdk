@@ -114,6 +114,28 @@ macro_rules! generate_provider_has_default_interface {
             assert_eq!(provider.settings.base_url, "http://localhost:8080/");
             assert_eq!(provider.settings.path, Some("/custom/path".to_string()));
 
+            let provider_with_body = $provider_type::<$model_struct>::builder()
+                .provider_name("test-provider-body".to_string())
+                .api_key("test-api-key")
+                .base_url("http://localhost:8080")
+                .body(serde_json::json!({
+                    "store": false
+                }))
+                .build()
+                .unwrap();
+
+            assert_eq!(
+                provider_with_body.settings.body,
+                Some(
+                    serde_json::json!({
+                        "store": false
+                    })
+                    .as_object()
+                    .expect("body should be an object")
+                    .clone()
+                )
+            );
+
             // should fail on invalid base url
             let provider2 = $provider_type::<$model_struct>::builder()
                 .provider_name("test-provider2".to_string())
