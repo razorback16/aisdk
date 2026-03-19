@@ -42,9 +42,9 @@ impl<M: ModelName> EmbeddingClient for OpenAIChatCompletions<M> {
         Vec::new()
     }
 
-    fn body(&self) -> reqwest::Body {
+    fn body(&self) -> Result<reqwest::Body> {
         // This will be set when embedding is called
-        reqwest::Body::from("") // Placeholder, will be replaced
+        Ok(reqwest::Body::from("")) // Placeholder, will be replaced
     }
 }
 
@@ -114,9 +114,11 @@ impl EmbeddingClient for EmbeddingClientWrapper {
         Vec::new()
     }
 
-    fn body(&self) -> reqwest::Body {
-        let body = serde_json::to_string(&self.options).unwrap();
-        reqwest::Body::from(body)
+    fn body(&self) -> Result<reqwest::Body> {
+        let body = serde_json::to_vec(&self.options).map_err(|e| {
+            crate::Error::Other(format!("Failed to serialize embedding request body: {e}"))
+        })?;
+        Ok(reqwest::Body::from(body))
     }
 }
 

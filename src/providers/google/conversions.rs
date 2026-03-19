@@ -3,10 +3,10 @@ use crate::core::embedding_model::EmbeddingModelOptions;
 use crate::core::language_model::{LanguageModelOptions, LanguageModelResponseContentType, Usage};
 use crate::core::messages::{Message, TaggedMessage};
 use crate::core::tools::Tool;
-use crate::providers::google::client::GoogleEmbeddingOptions;
 use crate::providers::google::client::types::{
     self, Content, FunctionDeclaration, GenerateContentRequest, Part, Role,
 };
+use crate::providers::google::client::{GoogleEmbeddingOptions, GoogleOptions};
 use crate::providers::google::extensions::GoogleToolMetadata;
 use serde_json::Value;
 
@@ -80,6 +80,20 @@ impl From<LanguageModelOptions> for GenerateContentRequest {
             system_instruction,
             generation_config,
             cached_content: None,
+        }
+    }
+}
+
+impl From<LanguageModelOptions> for GoogleOptions {
+    fn from(options: LanguageModelOptions) -> Self {
+        let extra_body = options.body.clone();
+        let request: GenerateContentRequest = options.into();
+
+        GoogleOptions {
+            model: String::new(),
+            request: Some(request),
+            streaming: false,
+            extra_body,
         }
     }
 }

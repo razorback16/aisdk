@@ -13,6 +13,7 @@ use crate::providers::openai_chat_completions::client::{self, types};
 
 impl From<LanguageModelOptions> for client::ChatCompletionsOptions {
     fn from(options: LanguageModelOptions) -> Self {
+        let extra_body = options.body.clone();
         let mut messages: Vec<types::ChatMessage> = Vec::new();
 
         if let Some(system_prompt) = options.system {
@@ -115,6 +116,7 @@ impl From<LanguageModelOptions> for client::ChatCompletionsOptions {
             parallel_tool_calls,
             reasoning_effort,
             verbosity: None,
+            extra_body,
         }
     }
 }

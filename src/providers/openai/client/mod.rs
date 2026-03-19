@@ -6,7 +6,7 @@ pub(crate) mod types;
 
 pub(crate) use types::*;
 
-use crate::core::client::{EmbeddingClient, LanguageModelClient};
+use crate::core::client::{EmbeddingClient, LanguageModelClient, merge_body};
 use crate::error::Error;
 use crate::providers::openai::{ModelName, OpenAI};
 use reqwest::header::CONTENT_TYPE;
@@ -46,9 +46,12 @@ impl<M: ModelName> LanguageModelClient for OpenAI<M> {
         Vec::new()
     }
 
-    fn body(&self) -> reqwest::Body {
-        let body = serde_json::to_string(&self.lm_options).unwrap();
-        reqwest::Body::from(body)
+    fn body(&self) -> crate::error::Result<reqwest::Body> {
+        merge_body(
+            &self.lm_options,
+            self.settings.body.as_ref(),
+            self.lm_options.extra_body.as_ref(),
+        )
     }
 
     fn parse_stream_sse(
@@ -123,8 +126,10 @@ impl<M: ModelName> EmbeddingClient for OpenAI<M> {
         Vec::new()
     }
 
-    fn body(&self) -> reqwest::Body {
-        let body = serde_json::to_string(&self.embedding_options).unwrap();
-        reqwest::Body::from(body)
+    fn body(&self) -> crate::error::Result<reqwest::Body> {
+        let body = serde_json::to_vec(&self.embedding_options).map_err(|e| {
+            Error::Other(format!("Failed to serialize embedding request body: {e}"))
+        })?;
+        Ok(reqwest::Body::from(body))
     }
 }

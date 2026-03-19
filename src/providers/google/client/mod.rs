@@ -1,5 +1,5 @@
 //! Client implementation for the Google provider.
-use crate::core::client::{EmbeddingClient, LanguageModelClient};
+use crate::core::client::{EmbeddingClient, LanguageModelClient, merge_body};
 use crate::error::{Error, Result};
 use crate::providers::google::{Google, ModelName};
 use derive_builder::Builder;
@@ -19,6 +19,9 @@ pub(crate) struct GoogleOptions {
     #[serde(skip)]
     #[builder(default)]
     pub(crate) streaming: bool,
+    #[serde(skip)]
+    #[builder(default)]
+    pub(crate) extra_body: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
 impl GoogleOptions {
@@ -69,12 +72,20 @@ impl<M: ModelName> LanguageModelClient for Google<M> {
         Vec::new()
     }
 
-    fn body(&self) -> reqwest::Body {
+    fn body(&self) -> Result<reqwest::Body> {
         if let Some(request) = &self.lm_options.request {
-            let body = serde_json::to_string(request).unwrap();
-            return reqwest::Body::from(body);
-        };
-        reqwest::Body::from("{}")
+            return merge_body(
+                request,
+                self.settings.body.as_ref(),
+                self.lm_options.extra_body.as_ref(),
+            );
+        }
+
+        merge_body(
+            &serde_json::Value::Object(serde_json::Map::new()),
+            self.settings.body.as_ref(),
+            self.lm_options.extra_body.as_ref(),
+        )
     }
 
     fn parse_stream_sse(
@@ -146,11 +157,13 @@ impl<M: ModelName> EmbeddingClient for Google<M> {
         Vec::new()
     }
 
-    fn body(&self) -> reqwest::Body {
+    fn body(&self) -> Result<reqwest::Body> {
         let request = types::BatchEmbedContentsRequest {
             requests: self.embedding_options.requests.clone(),
         };
-        let body = serde_json::to_string(&request).unwrap();
-        reqwest::Body::from(body)
+        let body = serde_json::to_vec(&request).map_err(|e| {
+            Error::Other(format!("Failed to serialize embedding request body: {e}"))
+        })?;
+        Ok(reqwest::Body::from(body))
     }
 }

@@ -8,6 +8,7 @@ use futures::StreamExt;
 use reqwest;
 use reqwest::IntoUrl;
 use reqwest_eventsource::{Event, RequestBuilderExt};
+use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::collections::HashMap;
 use std::pin::Pin;
@@ -205,40 +206,36 @@ where
     }
 }
 
-/// Merges model-level and request-level body fields.
-/// Request-level fields take priority over model-level fields.
+/// Merges a typed request body with provider-level and request-level body fields.
+/// Request-level fields take priority over provider-level fields.
 #[allow(dead_code)]
-pub(crate) fn merge_body(
-    model_level: &Option<serde_json::Map<String, serde_json::Value>>,
-    request_level: Option<serde_json::Map<String, serde_json::Value>>,
-) -> Option<serde_json::Map<String, serde_json::Value>> {
-    match (model_level, request_level) {
-        (None, None) => None,
-        (Some(model), None) => Some(model.clone()),
-        (None, Some(request)) => Some(request),
-        (Some(model), Some(request)) => {
-            let mut merged = model.clone();
-            merged.extend(request);
-            Some(merged)
-        }
-    }
-}
+pub(crate) fn merge_body<T>(
+    request: &T,
+    provider_level: Option<&serde_json::Map<String, serde_json::Value>>,
+    request_level: Option<&serde_json::Map<String, serde_json::Value>>,
+) -> Result<reqwest::Body>
+where
+    T: Serialize,
+{
+    let mut json = serde_json::to_value(request)
+        .map_err(|e| Error::Other(format!("Failed to serialize request body: {e}")))?;
 
-fn apply_body_overrides(
-    body_bytes: &[u8],
-    body: Option<serde_json::Map<String, serde_json::Value>>,
-) -> Vec<u8> {
-    match body {
-        Some(overrides) if !overrides.is_empty() => {
-            let mut json: serde_json::Value = serde_json::from_slice(body_bytes)
-                .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
-            if let serde_json::Value::Object(ref mut map) = json {
-                map.extend(overrides);
-            }
-            serde_json::to_vec(&json).unwrap_or_else(|_| body_bytes.to_vec())
-        }
-        _ => body_bytes.to_vec(),
+    let map = json
+        .as_object_mut()
+        .ok_or_else(|| Error::Other("Request body must serialize to a JSON object".to_string()))?;
+
+    if let Some(provider_overrides) = provider_level {
+        map.extend(provider_overrides.clone());
     }
+
+    if let Some(request_overrides) = request_level {
+        map.extend(request_overrides.clone());
+    }
+
+    let body_bytes = serde_json::to_vec(&json)
+        .map_err(|e| Error::Other(format!("Failed to encode request body: {e}")))?;
+
+    Ok(reqwest::Body::from(body_bytes))
 }
 
 #[allow(dead_code)]
@@ -249,21 +246,20 @@ pub(crate) trait LanguageModelClient {
     fn path(&self) -> String;
     fn method(&self) -> reqwest::Method;
     fn query_params(&self) -> Vec<(&str, &str)>;
-    fn body(&self) -> reqwest::Body;
+    fn body(&self) -> Result<reqwest::Body>;
     fn headers(&self) -> reqwest::header::HeaderMap;
 
     async fn send(
         &self,
         base_url: impl IntoUrl,
         additional_headers: Option<HashMap<String, String>>,
-        body: Option<serde_json::Map<String, serde_json::Value>>,
     ) -> Result<Self::Response> {
         let url = join_url(base_url, &self.path())?;
 
         let body_bytes = {
-            let raw = self.body();
+            let raw = self.body()?;
             match raw.as_bytes() {
-                Some(bytes) => apply_body_overrides(bytes, body),
+                Some(bytes) => bytes.to_vec(),
                 None => {
                     log::warn!("Request body is not retryable (streaming body)");
                     vec![]
@@ -304,7 +300,6 @@ pub(crate) trait LanguageModelClient {
         &self,
         base_url: impl IntoUrl,
         additional_headers: Option<HashMap<String, String>>,
-        body: Option<serde_json::Map<String, serde_json::Value>>,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<Self::StreamEvent>> + Send>>>
     where
         Self::StreamEvent: Send + 'static,
@@ -321,12 +316,6 @@ pub(crate) trait LanguageModelClient {
             headers.extend(extra_map);
         }
 
-        let req_body = {
-            let raw = self.body();
-            let bytes = raw.as_bytes().unwrap_or(&[]);
-            reqwest::Body::from(apply_body_overrides(bytes, body))
-        };
-
         // Establish the event source stream directly
         // Note: Status code errors (including 429) will be surfaced as stream events
         // and should be handled by retry logic in the provider's stream_text() method
@@ -334,7 +323,7 @@ pub(crate) trait LanguageModelClient {
             .request(self.method(), url.clone())
             .headers(headers)
             .query(&self.query_params())
-            .body(req_body)
+            .body(self.body()?)
             .eventsource()
             .map_err(|e| Error::ApiError {
                 status_code: None,
@@ -371,7 +360,7 @@ pub(crate) trait EmbeddingClient {
     fn path(&self) -> String;
     fn method(&self) -> reqwest::Method;
     fn query_params(&self) -> Vec<(&str, &str)>;
-    fn body(&self) -> reqwest::Body;
+    fn body(&self) -> Result<reqwest::Body>;
     fn headers(&self) -> reqwest::header::HeaderMap;
 
     async fn send(
@@ -387,7 +376,7 @@ pub(crate) trait EmbeddingClient {
 
         // Serialize body once to avoid consumption issues on retries
         let body_bytes = {
-            let body = self.body();
+            let body = self.body()?;
             // Convert Body to bytes - this is the critical fix for retry body consumption
             match body.as_bytes() {
                 Some(bytes) => bytes.to_vec(),
@@ -957,32 +946,50 @@ mod tests {
         assert_eq!(result, None); // Should fail to parse as u64
     }
 
-    #[test]
-    fn test_apply_body_overrides_none() {
-        let body = br#"{"model":"gpt-4o","input":"hello"}"#;
-        let result = apply_body_overrides(body, None);
-        assert_eq!(result, body.to_vec());
+    #[derive(serde::Serialize)]
+    struct TestBody<'a> {
+        model: &'a str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        temperature: Option<f32>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        reasoning: Option<serde_json::Value>,
+    }
+
+    fn parse_body(body: reqwest::Body) -> serde_json::Value {
+        let bytes = body.as_bytes().expect("body should be available as bytes");
+        serde_json::from_slice(bytes).expect("body should contain valid json")
     }
 
     #[test]
-    fn test_apply_body_overrides_empty_map() {
-        let body = br#"{"model":"gpt-4o"}"#;
-        let result = apply_body_overrides(body, Some(serde_json::Map::new()));
-        assert_eq!(result, body.to_vec());
+    fn test_merge_body_without_overrides() {
+        let body = TestBody {
+            model: "gpt-4o",
+            temperature: None,
+            reasoning: None,
+        };
+
+        let parsed = parse_body(merge_body(&body, None, None).expect("body should merge"));
+
+        assert_eq!(parsed["model"], "gpt-4o");
+        assert!(parsed.get("temperature").is_none());
     }
 
     #[test]
-    fn test_apply_body_overrides_adds_new_fields() {
-        let body = br#"{"model":"gpt-4o"}"#;
-        let mut extra = serde_json::Map::new();
-        extra.insert("store".to_string(), serde_json::Value::Bool(false));
-        extra.insert(
+    fn test_merge_body_adds_new_fields() {
+        let body = TestBody {
+            model: "gpt-4o",
+            temperature: None,
+            reasoning: None,
+        };
+        let mut request = serde_json::Map::new();
+        request.insert("store".to_string(), serde_json::Value::Bool(false));
+        request.insert(
             "instructions".to_string(),
             serde_json::Value::String("Be helpful".to_string()),
         );
 
-        let result = apply_body_overrides(body, Some(extra));
-        let parsed: serde_json::Value = serde_json::from_slice(&result).unwrap();
+        let parsed =
+            parse_body(merge_body(&body, None, Some(&request)).expect("body should merge"));
 
         assert_eq!(parsed["model"], "gpt-4o");
         assert_eq!(parsed["store"], false);
@@ -990,29 +997,47 @@ mod tests {
     }
 
     #[test]
-    fn test_apply_body_overrides_overwrites_existing_fields() {
-        let body = br#"{"model":"gpt-4o","temperature":0.5}"#;
-        let mut extra = serde_json::Map::new();
-        extra.insert(
+    fn test_merge_body_request_overrides_provider_level_fields() {
+        let body = TestBody {
+            model: "gpt-4o",
+            temperature: Some(0.5),
+            reasoning: None,
+        };
+        let mut provider = serde_json::Map::new();
+        provider.insert("store".to_string(), serde_json::Value::Bool(false));
+        provider.insert(
             "temperature".to_string(),
-            serde_json::Value::Number(serde_json::Number::from_f64(0.9).unwrap()),
+            serde_json::Value::Number(serde_json::Number::from_f64(0.7).expect("valid number")),
         );
 
-        let result = apply_body_overrides(body, Some(extra));
-        let parsed: serde_json::Value = serde_json::from_slice(&result).unwrap();
+        let mut request = serde_json::Map::new();
+        request.insert("store".to_string(), serde_json::Value::Bool(true));
+        request.insert(
+            "temperature".to_string(),
+            serde_json::Value::Number(serde_json::Number::from_f64(0.9).expect("valid number")),
+        );
+
+        let parsed = parse_body(
+            merge_body(&body, Some(&provider), Some(&request)).expect("body should merge"),
+        );
 
         assert_eq!(parsed["model"], "gpt-4o");
+        assert_eq!(parsed["store"], true);
         assert_eq!(parsed["temperature"], 0.9);
     }
 
     #[test]
-    fn test_apply_body_overrides_preserves_nested_objects() {
-        let body = br#"{"model":"gpt-4o","reasoning":{"effort":"high"}}"#;
-        let mut extra = serde_json::Map::new();
-        extra.insert("store".to_string(), serde_json::Value::Bool(false));
+    fn test_merge_body_preserves_nested_objects() {
+        let body = TestBody {
+            model: "gpt-4o",
+            temperature: None,
+            reasoning: Some(serde_json::json!({ "effort": "high" })),
+        };
+        let mut request = serde_json::Map::new();
+        request.insert("store".to_string(), serde_json::Value::Bool(false));
 
-        let result = apply_body_overrides(body, Some(extra));
-        let parsed: serde_json::Value = serde_json::from_slice(&result).unwrap();
+        let parsed =
+            parse_body(merge_body(&body, None, Some(&request)).expect("body should merge"));
 
         assert_eq!(parsed["model"], "gpt-4o");
         assert_eq!(parsed["reasoning"]["effort"], "high");
@@ -1020,49 +1045,10 @@ mod tests {
     }
 
     #[test]
-    fn test_apply_body_overrides_invalid_base_body_falls_back() {
-        let body = b"not json";
-        let mut extra = serde_json::Map::new();
-        extra.insert("store".to_string(), serde_json::Value::Bool(false));
+    fn test_merge_body_rejects_non_object_requests() {
+        let err = merge_body(&serde_json::Value::String("oops".to_string()), None, None)
+            .expect_err("non-object bodies should fail");
 
-        let result = apply_body_overrides(body, Some(extra));
-        let parsed: serde_json::Value = serde_json::from_slice(&result).unwrap();
-
-        assert_eq!(parsed["store"], false);
-    }
-
-    #[test]
-    fn test_merge_body_both_none() {
-        assert_eq!(merge_body(&None, None), None);
-    }
-
-    #[test]
-    fn test_merge_body_model_only() {
-        let mut model = serde_json::Map::new();
-        model.insert("store".to_string(), serde_json::Value::Bool(false));
-        let result = merge_body(&Some(model.clone()), None);
-        assert_eq!(result, Some(model));
-    }
-
-    #[test]
-    fn test_merge_body_request_only() {
-        let mut request = serde_json::Map::new();
-        request.insert("store".to_string(), serde_json::Value::Bool(true));
-        let result = merge_body(&None, Some(request.clone()));
-        assert_eq!(result, Some(request));
-    }
-
-    #[test]
-    fn test_merge_body_request_overrides_model() {
-        let mut model = serde_json::Map::new();
-        model.insert("store".to_string(), serde_json::Value::Bool(false));
-        model.insert("key".to_string(), serde_json::Value::String("model".into()));
-
-        let mut request = serde_json::Map::new();
-        request.insert("store".to_string(), serde_json::Value::Bool(true));
-
-        let result = merge_body(&Some(model), Some(request)).unwrap();
-        assert_eq!(result["store"], serde_json::Value::Bool(true));
-        assert_eq!(result["key"], serde_json::Value::String("model".into()));
+        assert!(matches!(err, Error::Other(_)));
     }
 }

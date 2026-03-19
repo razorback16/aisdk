@@ -35,6 +35,7 @@ impl From<Tool> for types::ToolParams {
 
 impl From<LanguageModelOptions> for client::OpenAILanguageModelOptions {
     fn from(options: LanguageModelOptions) -> Self {
+        let extra_body = options.body.clone();
         let items: Vec<types::InputItem> = options
             .messages
             .into_iter()
@@ -75,6 +76,7 @@ impl From<LanguageModelOptions> for client::OpenAILanguageModelOptions {
             stream: Some(false),
             top_p: options.top_p.map(|t| t as f32 / 100.0),
             tools,
+            extra_body,
         }
     }
 }

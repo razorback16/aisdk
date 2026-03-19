@@ -68,6 +68,9 @@ pub(crate) struct ChatCompletionsOptions {
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub verbosity: Option<String>,
+
+    #[serde(skip)]
+    pub extra_body: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

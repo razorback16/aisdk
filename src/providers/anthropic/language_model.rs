@@ -1,7 +1,7 @@
 //! Language model implementation for the Anthropic provider.
 
 use crate::core::capabilities::ModelName;
-use crate::core::client::{LanguageModelClient, merge_body};
+use crate::core::client::LanguageModelClient;
 use crate::core::language_model::{
     LanguageModelOptions, LanguageModelResponse, LanguageModelResponseContentType,
     LanguageModelStreamChunk, ProviderStream,
@@ -34,13 +34,12 @@ impl<M: ModelName> LanguageModel for Anthropic<M> {
         options: LanguageModelOptions,
     ) -> Result<LanguageModelResponse> {
         let additional_headers = options.headers.clone();
-        let body = merge_body(&self.settings.body, options.body.clone());
         let mut options: AnthropicOptions = options.into();
         options.model = self.options.model.clone();
         self.options = options;
 
         let response = self
-            .send(self.settings.base_url.clone(), additional_headers, body)
+            .send(self.settings.base_url.clone(), additional_headers)
             .await?;
 
         let mut collected: Vec<LanguageModelResponseContentType> = Vec::new();
@@ -91,7 +90,6 @@ impl<M: ModelName> LanguageModel for Anthropic<M> {
     /// Streams text using the Anthropic provider.
     async fn stream_text(&mut self, options: LanguageModelOptions) -> Result<ProviderStream> {
         let additional_headers = options.headers.clone();
-        let body = merge_body(&self.settings.body, options.body.clone());
         let mut options: AnthropicOptions = options.into();
         options.stream = Some(true);
         options.model = self.options.model.clone();
@@ -104,11 +102,7 @@ impl<M: ModelName> LanguageModel for Anthropic<M> {
 
         let response = loop {
             match self
-                .send_and_stream(
-                    self.settings.base_url.clone(),
-                    additional_headers.clone(),
-                    body.clone(),
-                )
+                .send_and_stream(self.settings.base_url.clone(), additional_headers.clone())
                 .await
             {
                 Ok(stream) => break stream,
@@ -627,6 +621,58 @@ mod tests {
                 "x-trace-id".to_string(),
                 "trace-123".to_string(),
             )]))
+            .build()
+            .generate_text()
+            .await
+            .expect("request should succeed");
+
+        assert_eq!(response.text().as_deref(), Some("ok"));
+    }
+
+    #[tokio::test]
+    async fn test_generate_text_merges_provider_and_request_body_overrides() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/messages"))
+            .and(header("x-api-key", "test-key"))
+            .and(body_partial_json(json!({
+                "model": "claude-sonnet-4-0",
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": "Hello"
+                    }
+                ],
+                "system": "Use body override",
+                "metadata": {
+                    "trace_id": "abc123"
+                }
+            })))
+            .respond_with(anthropic_message_response("ok"))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let mut model = test_model(server.uri());
+        model.settings.body = Some(
+            json!({
+                "metadata": {
+                    "trace_id": "abc123"
+                }
+            })
+            .as_object()
+            .expect("provider body should be an object")
+            .clone(),
+        );
+
+        let response = LanguageModelRequest::builder()
+            .model(model)
+            .system("You are helpful")
+            .messages(vec![Message::User("Hello".to_string().into())])
+            .body(json!({
+                "system": "Use body override"
+            }))
             .build()
             .generate_text()
             .await

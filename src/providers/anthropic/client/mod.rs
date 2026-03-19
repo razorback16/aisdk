@@ -10,7 +10,7 @@ use reqwest_eventsource::Event;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    core::client::LanguageModelClient,
+    core::client::{LanguageModelClient, merge_body},
     providers::anthropic::{ANTHROPIC_API_VERSION, Anthropic},
 };
 
@@ -46,6 +46,9 @@ pub(crate) struct AnthropicOptions {
     #[builder(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub top_p: Option<f32>,
+    #[builder(default)]
+    #[serde(skip)]
+    pub(crate) extra_body: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
 impl AnthropicOptions {
@@ -83,9 +86,12 @@ impl<M: ModelName> LanguageModelClient for Anthropic<M> {
         Vec::new()
     }
 
-    fn body(&self) -> reqwest::Body {
-        let body = serde_json::to_string(&self.options).unwrap();
-        reqwest::Body::from(body)
+    fn body(&self) -> crate::error::Result<reqwest::Body> {
+        merge_body(
+            &self.options,
+            self.settings.body.as_ref(),
+            self.options.extra_body.as_ref(),
+        )
     }
 
     fn parse_stream_sse(
