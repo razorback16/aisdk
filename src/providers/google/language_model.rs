@@ -7,12 +7,7 @@ use crate::core::language_model::{
 };
 use crate::core::messages::AssistantMessage;
 use crate::core::tools::ToolDetails;
-use crate::providers::google::{Google, client::types, extensions};
-use crate::providers::google::{
-    Google,
-    client::{self, types},
-    extensions,
-};
+use crate::providers::google::{Google, client, client::types, extensions};
 use crate::{
     core::{language_model::LanguageModel, tools::ToolCallInfo},
     error::Result,
