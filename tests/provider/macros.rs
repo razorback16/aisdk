@@ -584,7 +584,7 @@ macro_rules! generate_language_model_tool_tests {
 
             // define tool function body, should return Result<String, String>
             #[allow(unused_variables)]
-            let func = ToolExecute::new(Box::new(|inp: Value| {
+            let func = ToolExecute::from_sync(|_ctx, inp: Value| {
                 // Ai SDK will pass in a json object with the following structure
                 // ```json
                 // {
@@ -593,7 +593,7 @@ macro_rules! generate_language_model_tool_tests {
                 // ```
                 let location = inp.get("location").unwrap();
                 Ok(format!("Cloudy"))
-            }));
+            });
 
             // define tool input structure
             #[derive(schemars::JsonSchema, Debug)]

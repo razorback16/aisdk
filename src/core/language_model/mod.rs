@@ -13,7 +13,7 @@ pub mod request;
 pub mod stream_text;
 
 use crate::core::messages::{AssistantMessage, TaggedMessage, TaggedMessageHelpers};
-use crate::core::tools::ToolList;
+use crate::core::tools::{ToolContext, ToolList};
 use crate::core::{
     Message,
     tools::{ToolCallInfo, ToolResultInfo},
@@ -290,9 +290,21 @@ impl LanguageModelOptions {
     }
 
     /// Executes a tool call and adds the result to the message history.
-    pub(crate) async fn handle_tool_call(&mut self, input: &ToolCallInfo) -> &mut Self {
+    pub(crate) async fn handle_tool_call(
+        &mut self,
+        input: &ToolCallInfo,
+        stream_tx: Option<UnboundedSender<LanguageModelStreamChunkType>>,
+    ) -> &mut Self {
         if let Some(tools) = &self.tools {
-            let tool_result = tools.execute(input.clone()).await;
+            let tool_result = tools
+                .execute(
+                    match stream_tx {
+                        Some(tx) => ToolContext::new(self.clone()).with_stream_tx(tx),
+                        None => ToolContext::new(self.clone()),
+                    },
+                    input.clone(),
+                )
+                .await;
 
             let mut tool_output_infos = Vec::new();
 

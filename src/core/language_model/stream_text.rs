@@ -165,7 +165,9 @@ impl<M: LanguageModel> LanguageModelRequest<M> {
                                                         usage,
                                                     )),
                                                 ));
-                                                options.handle_tool_call(tool_info).await;
+                                                options
+                                                    .handle_tool_call(tool_info, Some(tx.clone()))
+                                                    .await;
                                                 had_tool_call = true;
                                             }
                                             _ => {}

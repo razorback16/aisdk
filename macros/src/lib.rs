@@ -176,14 +176,14 @@ pub fn tool(_attr: TokenStream, item: TokenStream) -> TokenStream {
 
     let execute_impl = if is_async {
         quote! {
-            ::aisdk::core::tools::ToolExecute::from_async(|inp| async move {
+            ::aisdk::core::tools::ToolExecute::from_async(|_ctx, inp| async move {
                 #(#binding_tokens)*
                 #block
             })
         }
     } else {
         quote! {
-            ::aisdk::core::tools::ToolExecute::from_sync(|inp| {
+            ::aisdk::core::tools::ToolExecute::from_sync(|_ctx, inp| {
                 #(#binding_tokens)*
                 #block
             })

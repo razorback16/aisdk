@@ -3,7 +3,7 @@
 #[cfg(test)]
 mod tests {
     use aisdk::__private::schemars::{self, schema_for};
-    use aisdk::core::tools::{Tool, ToolExecute};
+    use aisdk::core::tools::{Tool, ToolContext, ToolExecute};
     use aisdk::macros::tool;
     use serde_json::Value;
     use std::collections::HashMap;
@@ -55,14 +55,17 @@ mod tests {
         );
         assert_eq!(
             tool.execute
-                .call(Value::Object(
-                    HashMap::from([
-                        ("a".to_string(), 1.into()),
-                        ("b".to_string(), Option::<u32>::None.into())
-                    ])
-                    .into_iter()
-                    .collect()
-                ))
+                .call(
+                    ToolContext::default(),
+                    Value::Object(
+                        HashMap::from([
+                            ("a".to_string(), 1.into()),
+                            ("b".to_string(), Option::<u32>::None.into())
+                        ])
+                        .into_iter()
+                        .collect()
+                    )
+                )
                 .await
                 .unwrap(),
             "10".to_string()
@@ -77,7 +80,10 @@ mod tests {
         assert_eq!(tool.description, " Tool that have async body");
         assert_eq!(
             tool.execute
-                .call(Value::Object(serde_json::Map::new()))
+                .call(
+                    ToolContext::default(),
+                    Value::Object(serde_json::Map::new())
+                )
                 .await
                 .unwrap(),
             "Hello World".to_string()
@@ -161,7 +167,7 @@ mod tests {
             .name("builder-sync-tool")
             .description("sync builder test")
             .input_schema(schema_for!(ToolInput))
-            .execute(ToolExecute::from_sync(|params: Value| {
+            .execute(ToolExecute::from_sync(|_ctx, params: Value| {
                 let a = params["a"].as_u64().unwrap();
                 let b = params["b"].as_u64().unwrap_or_default();
                 Ok(format!("{}", a + b))
@@ -171,11 +177,14 @@ mod tests {
 
         assert_eq!(
             tool.execute
-                .call(Value::Object(
-                    HashMap::from([("a".to_string(), 2.into()), ("b".to_string(), 3.into())])
-                        .into_iter()
-                        .collect()
-                ))
+                .call(
+                    ToolContext::default(),
+                    Value::Object(
+                        HashMap::from([("a".to_string(), 2.into()), ("b".to_string(), 3.into())])
+                            .into_iter()
+                            .collect()
+                    )
+                )
                 .await
                 .unwrap(),
             "5".to_string()
@@ -191,7 +200,7 @@ mod tests {
             .name("builder-async-tool")
             .description("async builder test")
             .input_schema(schema_for!(NoArgs))
-            .execute(ToolExecute::from_async(|_params: Value| async move {
+            .execute(ToolExecute::from_async(|_ctx, _params: Value| async move {
                 tokio::time::sleep(std::time::Duration::from_millis(5)).await;
                 Ok("builder async".to_string())
             }))
@@ -200,7 +209,10 @@ mod tests {
 
         assert_eq!(
             tool.execute
-                .call(Value::Object(serde_json::Map::new()))
+                .call(
+                    ToolContext::default(),
+                    Value::Object(serde_json::Map::new())
+                )
                 .await
                 .unwrap(),
             "builder async".to_string()
