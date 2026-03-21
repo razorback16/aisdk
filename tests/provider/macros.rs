@@ -782,10 +782,10 @@ macro_rules! generate_language_model_hook_tests {
 
             #[tool]
             fn get_neighbourhood() -> Tool {
-                Ok("".to_string())
+                Ok("ankocha".to_string())
             }
 
-            let _ = LanguageModelRequest::builder()
+            let result = LanguageModelRequest::builder()
                 .model($tool_model)
                 .system("Call the tool. Return the neighborhood. Nothing more and nothing less")
                 .prompt("What is the neighborhood?")
@@ -800,6 +800,8 @@ macro_rules! generate_language_model_hook_tests {
                 .generate_text()
                 .await
                 .unwrap();
+
+            assert!(result.text().is_some());
 
             let log = log.lock().unwrap();
             // Check pairs of prepare/finish
