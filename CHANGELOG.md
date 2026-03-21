@@ -27,11 +27,15 @@ Changelog entries are grouped by type, with the following types:
 - Added Provider level HTTP headers to `LanguageModelRequest` and `EmbeddingModelRequest`. allowing request header injection on provider intialization.
 - Added async tool executor support through `ToolExecute::from_async(...)`.
 - Added support for `#[tool] pub async fn ...` tool bodies.
+- Added `ToolContext` for tools, enabling runtime-aware execution and access to `LanguageModelOptions`.
+- Added optional tool stream sender support in `ToolContext`, allowing tools to emit `LanguageModelStreamChunkType` from the tool body.
 
 ### Changed
 
 - `ToolExecute` now uses a trait-based executor abstraction internally, allowing both synchronous and asynchronous tool executors behind the same `Tool` API.
 - `ToolExecute::call(...)` is now async and must be awaited. This is a breaking change for direct callers of the tool executor API.
+- `ToolList::execute(...)` and `ToolExecute::call(...)` is now async, takes `ToolContext` as the first parameter as the first parameter for runtime-aware execution.
+- Removed `ToolExecute::new(...)` in favor of the explicit `from_sync(...)` and `from_async(...)` constructors.
 
 ## [0.5.2] - 2026-02-25
 

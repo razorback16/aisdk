@@ -3,8 +3,12 @@
 #[cfg(test)]
 mod tests {
     use aisdk::__private::schemars::{self, schema_for};
+    use aisdk::core::language_model::{
+        LanguageModelOptions, LanguageModelStream, LanguageModelStreamChunkType,
+    };
     use aisdk::core::tools::{Tool, ToolContext, ToolExecute};
     use aisdk::macros::tool;
+    use futures::StreamExt;
     use serde_json::Value;
     use std::collections::HashMap;
 
@@ -21,6 +25,27 @@ mod tests {
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
 
         Ok("Hello World".to_string())
+    }
+
+    #[tool]
+    /// Tool that reads runtime context.
+    pub fn context_tool(ctx: ToolContext, value: String) -> Tool {
+        let system = ctx.options().system.as_deref().unwrap_or_default();
+        Ok(format!("{system}:{value}"))
+    }
+
+    #[tool]
+    /// Tool that emits stream chunks through runtime context.
+    pub async fn context_stream_tool(ctx: ToolContext, value: String) -> Tool {
+        let _ = ctx.emit(LanguageModelStreamChunkType::Text(format!("tool:{value}")));
+        Ok(value)
+    }
+
+    #[tool]
+    /// Tool that accepts runtime context in a non-first position.
+    pub fn trailing_context_tool(value: String, ctx: ToolContext) -> Tool {
+        let system = ctx.options().system.as_deref().unwrap_or_default();
+        Ok(format!("{value}:{system}"))
     }
 
     #[tokio::test]
@@ -87,6 +112,103 @@ mod tests {
                 .await
                 .unwrap(),
             "Hello World".to_string()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_tool_macro_with_context_excludes_context_from_schema() {
+        let tool = context_tool();
+        let schema_properties = tool
+            .input_schema
+            .as_object()
+            .unwrap()
+            .get("properties")
+            .unwrap()
+            .as_object()
+            .unwrap();
+
+        assert!(schema_properties.contains_key("value"));
+        assert!(!schema_properties.contains_key("ctx"));
+
+        let mut options = LanguageModelOptions::default();
+        options.system = Some("system prompt".to_string());
+        let context = ToolContext::new(options);
+
+        assert_eq!(
+            tool.execute
+                .call(
+                    context,
+                    Value::Object(
+                        HashMap::from([("value".to_string(), "payload".into())])
+                            .into_iter()
+                            .collect()
+                    )
+                )
+                .await
+                .unwrap(),
+            "system prompt:payload"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_tool_macro_with_context_can_emit_stream_chunks() {
+        let tool = context_stream_tool();
+        let (tx, mut stream) = LanguageModelStream::new();
+        let context = ToolContext::new(LanguageModelOptions::default()).with_stream_tx(tx);
+
+        assert_eq!(
+            tool.execute
+                .call(
+                    context,
+                    Value::Object(
+                        HashMap::from([("value".to_string(), "payload".into())])
+                            .into_iter()
+                            .collect()
+                    )
+                )
+                .await
+                .unwrap(),
+            "payload"
+        );
+
+        match stream.next().await {
+            Some(LanguageModelStreamChunkType::Text(text)) => assert_eq!(text, "tool:payload"),
+            other => panic!("expected tool-emitted text chunk, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_tool_macro_with_trailing_context_excludes_context_from_schema() {
+        let tool = trailing_context_tool();
+        let schema_properties = tool
+            .input_schema
+            .as_object()
+            .unwrap()
+            .get("properties")
+            .unwrap()
+            .as_object()
+            .unwrap();
+
+        assert!(schema_properties.contains_key("value"));
+        assert!(!schema_properties.contains_key("ctx"));
+
+        let mut options = LanguageModelOptions::default();
+        options.system = Some("system prompt".to_string());
+        let context = ToolContext::new(options);
+
+        assert_eq!(
+            tool.execute
+                .call(
+                    context,
+                    Value::Object(
+                        HashMap::from([("value".to_string(), "payload".into())])
+                            .into_iter()
+                            .collect()
+                    )
+                )
+                .await
+                .unwrap(),
+            "payload:system prompt"
         );
     }
 

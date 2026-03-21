@@ -43,6 +43,7 @@ name = "aisdk-macros"
 version = "0.3.0"
 dependencies = [
  "aisdk",
+ "futures",
  "proc-macro2",
  "quote",
  "serde_json",
