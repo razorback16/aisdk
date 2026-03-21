@@ -23,6 +23,17 @@ Changelog entries are grouped by type, with the following types:
 
 - Fixed `DynamicModel` builder bug where `.model_name(...)` was overwritten on `.build()`, causing empty model IDs.
 
+### Added
+
+- Added optional jitter feature flag for backoff jitter (pulls in fastrand)
+- Added separate shared connection pools
+- Added retry logic for transport-level errors (timeout, connection refused)
+
+### Changed
+
+- Switched TLS backend from native-tls to rustls (removes OpenSSL dependency)
+- Reduced default max_retries from 5 to 3, initial_wait from 1s to 500ms and reduced default max_wait from 30s to 20s
+
 ## [0.5.1] - 2026-02-16
 
 ## [0.5.0] - 2026-02-16
@@ -122,10 +133,10 @@ Changelog entries are grouped by type, with the following types:
 - Rebranded to aisdk
 
 <!-- next-url -->
+
 [Unreleased]: https://github.com/lazy-hq/aisdk/compare/v0.5.2...HEAD
 [0.5.2]: https://github.com/lazy-hq/aisdk/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/lazy-hq/aisdk/compare/v0.5.0...v0.5.1
-
 [0.5.0]: https://github.com/lazy-hq/aisdk/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/lazy-hq/aisdk/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/lazy-hq/aisdk/compare/v0.2.1...v0.3.0
