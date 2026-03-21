@@ -9,6 +9,7 @@ use crate::core::capabilities::*;
 use crate::core::language_model::{LanguageModel, LanguageModelOptions};
 use crate::core::tools::Tool;
 use schemars::{JsonSchema, schema_for};
+use std::collections::HashMap;
 use std::fmt::Debug;
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
@@ -481,6 +482,39 @@ impl<M: LanguageModel> LanguageModelRequestBuilder<M, OptionsStage> {
         M: ReasoningSupport,
     {
         self.reasoning_effort = Some(reasoning_effort.into());
+        self
+    }
+
+    /// Sets custom HTTP headers for the request.
+    ///
+    /// These headers will be merged with the provider's default headers.
+    /// If a header key conflicts with a default header, the custom value takes precedence.
+    ///
+    /// # Parameters
+    ///
+    /// * `headers` - A map of header names to values.
+    ///
+    pub fn headers(mut self, headers: HashMap<String, String>) -> Self {
+        self.options.headers = Some(headers);
+        self
+    }
+
+    /// Sets extra fields to merge into the provider's request body.
+    ///
+    /// These fields are merged at the top level of the JSON body,
+    /// allowing provider-specific options without modifying the SDK.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// .body(serde_json::json!({
+    ///     "store": false
+    /// }))
+    /// ```
+    pub fn body(mut self, body: serde_json::Value) -> Self {
+        if let serde_json::Value::Object(map) = body {
+            self.options.body = Some(map);
+        }
         self
     }
 

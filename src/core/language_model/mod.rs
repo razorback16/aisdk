@@ -241,6 +241,15 @@ pub struct LanguageModelOptions {
 
     /// The reason why generation stopped.
     pub(crate) stop_reason: Option<StopReason>,
+
+    /// Custom HTTP headers to include in the request.
+    pub headers: Option<HashMap<String, String>>,
+
+    /// Extra fields to merge into the provider's request body.
+    /// These are merged at the top level of the JSON body, allowing
+    /// provider-specific options (e.g., OpenAI's `store`, `instructions`)
+    /// without modifying the SDK.
+    pub body: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
 impl Debug for LanguageModelOptions {
@@ -263,6 +272,8 @@ impl Debug for LanguageModelOptions {
             .field("stop_when", &self.stop_when.is_some())
             .field("on_step_start", &self.on_step_start.is_some())
             .field("on_step_finish", &self.on_step_finish.is_some())
+            .field("headers", &self.headers)
+            .field("body", &self.body)
             .finish()
     }
 }

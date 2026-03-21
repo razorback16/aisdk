@@ -8,7 +8,9 @@ use futures::StreamExt;
 use reqwest;
 use reqwest::IntoUrl;
 use reqwest_eventsource::{Event, RequestBuilderExt};
+use serde::Serialize;
 use serde::de::DeserializeOwned;
+use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::OnceLock;
 use std::time::Duration;
@@ -267,6 +269,64 @@ where
     }
 }
 
+/// Merges a typed request body with provider-level and request-level body fields.
+/// Request-level fields take priority over provider-level fields.
+#[allow(dead_code)]
+pub(crate) fn merge_body<T>(
+    request: &T,
+    provider_level: Option<&serde_json::Map<String, serde_json::Value>>,
+    request_level: Option<&serde_json::Map<String, serde_json::Value>>,
+) -> Result<reqwest::Body>
+where
+    T: Serialize,
+{
+    let body_bytes = serde_json::to_vec(request)
+        .map_err(|e| Error::Other(format!("Failed to serialize request body: {e}")))?;
+    let mut json: serde_json::Value = serde_json::from_slice(&body_bytes)
+        .map_err(|e| Error::Other(format!("Failed to parse request body as JSON: {e}")))?;
+
+    let map = json
+        .as_object_mut()
+        .ok_or_else(|| Error::Other("Request body must serialize to a JSON object".to_string()))?;
+
+    if let Some(provider_overrides) = provider_level {
+        map.extend(provider_overrides.clone());
+    }
+
+    if let Some(request_overrides) = request_level {
+        map.extend(request_overrides.clone());
+    }
+
+    let body_bytes = serde_json::to_vec(&json)
+        .map_err(|e| Error::Other(format!("Failed to encode request body: {e}")))?;
+
+    Ok(reqwest::Body::from(body_bytes))
+}
+
+/// Merges default, provider-level, and request-level headers.
+/// Request-level headers take priority over provider-level headers,
+/// which take priority over the provider defaults.
+#[allow(dead_code)]
+pub(crate) fn merge_headers(
+    mut default_headers: reqwest::header::HeaderMap,
+    provider_level: Option<&HashMap<String, String>>,
+    request_level: Option<&HashMap<String, String>>,
+) -> Result<reqwest::header::HeaderMap> {
+    if let Some(provider_headers) = provider_level {
+        let provider_headers = reqwest::header::HeaderMap::try_from(provider_headers)
+            .map_err(|e| Error::InvalidInput(format!("Invalid headers: {}", e)))?;
+        default_headers.extend(provider_headers);
+    }
+
+    if let Some(request_headers) = request_level {
+        let request_headers = reqwest::header::HeaderMap::try_from(request_headers)
+            .map_err(|e| Error::InvalidInput(format!("Invalid headers: {}", e)))?;
+        default_headers.extend(request_headers);
+    }
+
+    Ok(default_headers)
+}
+
 #[allow(dead_code)]
 pub(crate) trait LanguageModelClient {
     type Response: DeserializeOwned + std::fmt::Debug + Clone;
@@ -275,22 +335,17 @@ pub(crate) trait LanguageModelClient {
     fn path(&self) -> String;
     fn method(&self) -> reqwest::Method;
     fn query_params(&self) -> Vec<(&str, &str)>;
-    fn body(&self) -> reqwest::Body;
-    fn headers(&self) -> reqwest::header::HeaderMap;
+    fn body(&self) -> Result<reqwest::Body>;
+    fn headers(&self) -> Result<reqwest::header::HeaderMap>;
 
     async fn send(&self, base_url: impl IntoUrl) -> Result<Self::Response> {
         let url = join_url(base_url, &self.path())?;
 
-        // Serialize body once to avoid consumption issues on retries
         let body_bytes = {
-            let body = self.body();
-            // Convert Body to bytes - this is the critical fix for retry body consumption
-            // We need to get the bytes from the body to be able to reconstruct it
-            match body.as_bytes() {
+            let raw = self.body()?;
+            match raw.as_bytes() {
                 Some(bytes) => bytes.to_vec(),
                 None => {
-                    // If body doesn't have as_bytes (streaming body), we can't retry it
-                    // This should rarely happen for our use case (JSON bodies)
                     log::warn!("Request body is not retryable (streaming body)");
                     vec![]
                 }
@@ -298,14 +353,13 @@ pub(crate) trait LanguageModelClient {
         };
 
         let method = self.method();
-        let headers = self.headers();
         let query_params = self.query_params();
         let config = RetryConfig::default();
 
         retry_request(
             url,
             method,
-            headers,
+            self.headers()?,
             query_params,
             move || reqwest::Body::from(body_bytes.clone()),
             config,
@@ -338,9 +392,9 @@ pub(crate) trait LanguageModelClient {
         // and should be handled by retry logic in the provider's stream_text() method
         let events_stream = client
             .request(self.method(), url.clone())
-            .headers(self.headers())
+            .headers(self.headers()?)
             .query(&self.query_params())
-            .body(self.body())
+            .body(self.body()?)
             .eventsource()
             .map_err(|e| Error::ApiError {
                 status_code: None,
@@ -377,8 +431,8 @@ pub(crate) trait EmbeddingClient {
     fn path(&self) -> String;
     fn method(&self) -> reqwest::Method;
     fn query_params(&self) -> Vec<(&str, &str)>;
-    fn body(&self) -> reqwest::Body;
-    fn headers(&self) -> reqwest::header::HeaderMap;
+    fn body(&self) -> Result<reqwest::Body>;
+    fn headers(&self) -> Result<reqwest::header::HeaderMap>;
 
     async fn send(&self, base_url: impl IntoUrl) -> Result<Self::Response> {
         let base_url = base_url
@@ -389,7 +443,7 @@ pub(crate) trait EmbeddingClient {
 
         // Serialize body once to avoid consumption issues on retries
         let body_bytes = {
-            let body = self.body();
+            let body = self.body()?;
             // Convert Body to bytes - this is the critical fix for retry body consumption
             match body.as_bytes() {
                 Some(bytes) => bytes.to_vec(),
@@ -402,14 +456,13 @@ pub(crate) trait EmbeddingClient {
         };
 
         let method = self.method();
-        let headers = self.headers();
         let query_params = self.query_params();
         let config = RetryConfig::default();
 
         retry_request(
             url,
             method,
-            headers,
+            self.headers()?,
             query_params,
             move || reqwest::Body::from(body_bytes.clone()),
             config,
@@ -951,5 +1004,180 @@ mod tests {
 
         let result = parse_retry_after(&headers);
         assert_eq!(result, None); // Should fail to parse as u64
+    }
+
+    #[derive(serde::Serialize)]
+    struct TestBody<'a> {
+        model: &'a str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        temperature: Option<f32>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        reasoning: Option<serde_json::Value>,
+    }
+
+    fn parse_body(body: reqwest::Body) -> serde_json::Value {
+        let bytes = body.as_bytes().expect("body should be available as bytes");
+        serde_json::from_slice(bytes).expect("body should contain valid json")
+    }
+
+    #[test]
+    fn test_merge_body_without_overrides() {
+        let body = TestBody {
+            model: "gpt-4o",
+            temperature: None,
+            reasoning: None,
+        };
+
+        let parsed = parse_body(merge_body(&body, None, None).expect("body should merge"));
+
+        assert_eq!(parsed["model"], "gpt-4o");
+        assert!(parsed.get("temperature").is_none());
+    }
+
+    #[test]
+    fn test_merge_body_adds_new_fields() {
+        let body = TestBody {
+            model: "gpt-4o",
+            temperature: None,
+            reasoning: None,
+        };
+        let mut request = serde_json::Map::new();
+        request.insert("store".to_string(), serde_json::Value::Bool(false));
+        request.insert(
+            "instructions".to_string(),
+            serde_json::Value::String("Be helpful".to_string()),
+        );
+
+        let parsed =
+            parse_body(merge_body(&body, None, Some(&request)).expect("body should merge"));
+
+        assert_eq!(parsed["model"], "gpt-4o");
+        assert_eq!(parsed["store"], false);
+        assert_eq!(parsed["instructions"], "Be helpful");
+    }
+
+    #[test]
+    fn test_merge_body_request_overrides_provider_level_fields() {
+        let body = TestBody {
+            model: "gpt-4o",
+            temperature: Some(0.5),
+            reasoning: None,
+        };
+        let mut provider = serde_json::Map::new();
+        provider.insert("store".to_string(), serde_json::Value::Bool(false));
+        provider.insert(
+            "temperature".to_string(),
+            serde_json::Value::Number(serde_json::Number::from_f64(0.7).expect("valid number")),
+        );
+
+        let mut request = serde_json::Map::new();
+        request.insert("store".to_string(), serde_json::Value::Bool(true));
+        request.insert(
+            "temperature".to_string(),
+            serde_json::Value::Number(serde_json::Number::from_f64(0.9).expect("valid number")),
+        );
+
+        let parsed = parse_body(
+            merge_body(&body, Some(&provider), Some(&request)).expect("body should merge"),
+        );
+
+        assert_eq!(parsed["model"], "gpt-4o");
+        assert_eq!(parsed["store"], true);
+        assert_eq!(parsed["temperature"], 0.9);
+    }
+
+    #[test]
+    fn test_merge_body_preserves_nested_objects() {
+        let body = TestBody {
+            model: "gpt-4o",
+            temperature: None,
+            reasoning: Some(serde_json::json!({ "effort": "high" })),
+        };
+        let mut request = serde_json::Map::new();
+        request.insert("store".to_string(), serde_json::Value::Bool(false));
+
+        let parsed =
+            parse_body(merge_body(&body, None, Some(&request)).expect("body should merge"));
+
+        assert_eq!(parsed["model"], "gpt-4o");
+        assert_eq!(parsed["reasoning"]["effort"], "high");
+        assert_eq!(parsed["store"], false);
+    }
+
+    #[test]
+    fn test_merge_body_rejects_non_object_requests() {
+        let err = merge_body(&serde_json::Value::String("oops".to_string()), None, None)
+            .expect_err("non-object bodies should fail");
+
+        assert!(matches!(err, Error::Other(_)));
+    }
+
+    #[test]
+    fn test_merge_headers_without_overrides() {
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert(
+            reqwest::header::AUTHORIZATION,
+            reqwest::header::HeaderValue::from_static("Bearer test-key"),
+        );
+
+        let merged = merge_headers(headers.clone(), None, None).expect("headers should merge");
+
+        assert_eq!(
+            merged.get(reqwest::header::AUTHORIZATION),
+            headers.get(reqwest::header::AUTHORIZATION)
+        );
+        assert_eq!(merged.len(), 1);
+    }
+
+    #[test]
+    fn test_merge_headers_request_overrides_provider_level_headers() {
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert(
+            reqwest::header::CONTENT_TYPE,
+            reqwest::header::HeaderValue::from_static("application/json"),
+        );
+
+        let provider = HashMap::from([
+            ("x-trace-id".to_string(), "provider-trace".to_string()),
+            ("x-provider".to_string(), "openai".to_string()),
+        ]);
+        let request = HashMap::from([
+            ("x-trace-id".to_string(), "request-trace".to_string()),
+            ("x-request".to_string(), "generate-text".to_string()),
+        ]);
+
+        let merged =
+            merge_headers(headers, Some(&provider), Some(&request)).expect("headers should merge");
+
+        assert_eq!(merged["content-type"], "application/json");
+        assert_eq!(merged["x-trace-id"], "request-trace");
+        assert_eq!(merged["x-provider"], "openai");
+        assert_eq!(merged["x-request"], "generate-text");
+    }
+
+    #[test]
+    fn test_merge_headers_rejects_invalid_header_name() {
+        let provider = HashMap::from([("bad header".to_string(), "value".to_string())]);
+
+        let err = merge_headers(reqwest::header::HeaderMap::new(), Some(&provider), None)
+            .expect_err("invalid header name should fail");
+
+        assert_eq!(
+            err.to_string(),
+            "Invalid input: Invalid headers: invalid HTTP header name"
+        );
+    }
+
+    #[test]
+    fn test_merge_headers_rejects_invalid_header_value() {
+        let request = HashMap::from([("x-trace-id".to_string(), "\ninvalid".to_string())]);
+
+        let err = merge_headers(reqwest::header::HeaderMap::new(), None, Some(&request))
+            .expect_err("invalid header value should fail");
+
+        assert_eq!(
+            err.to_string(),
+            "Invalid input: Invalid headers: failed to parse header value"
+        );
     }
 }
