@@ -531,6 +531,8 @@ pub enum LanguageModelStreamChunkType {
         /// Incremental argument JSON fragment.
         delta: String,
     },
+    /// Tool call input is complete and ready for execution.
+    ToolCallAvailable(ToolCallInfo),
     /// Tool call end emitted after tool execution, contains the result of the\
     /// tool call.
     // NOTE: This event is emitted by the sdk after the tool call is done
