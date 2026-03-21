@@ -165,6 +165,12 @@ impl<M: LanguageModel> LanguageModelRequest<M> {
                                                     )),
                                                 ));
 
+                                                let _ = tx.send(
+                                                    LanguageModelStreamChunkType::ToolCallAvailable(
+                                                        tool_info.clone(),
+                                                    ),
+                                                );
+
                                                 options.handle_tool_call(tool_info).await;
                                                 // Emit tool result AFTER execution (last message is the result)
                                                 if let Some(TaggedMessage {
@@ -393,5 +399,143 @@ impl StreamTextResponse {
     /// An `Option<StopReason>` indicating the termination reason if available.
     pub async fn stop_reason(&self) -> Option<StopReason> {
         self.options.lock().await.stop_reason()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::LanguageModelRequest;
+    use crate::core::capabilities::ToolCallSupport;
+    use crate::core::language_model::{
+        LanguageModel, LanguageModelOptions, LanguageModelResponse,
+        LanguageModelResponseContentType, LanguageModelStreamChunk, ProviderStream,
+    };
+    use crate::core::tools::{Tool, ToolCallInfo, ToolDetails, ToolExecute};
+    use crate::error::Result;
+    use async_trait::async_trait;
+    use futures::{StreamExt, stream};
+    use schemars::JsonSchema;
+    use serde::{Deserialize, Serialize};
+    use serde_json::json;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    #[derive(Clone, Debug)]
+    struct TestStreamingModel {
+        calls: Arc<AtomicUsize>,
+    }
+
+    impl ToolCallSupport for TestStreamingModel {}
+
+    #[async_trait]
+    impl LanguageModel for TestStreamingModel {
+        fn name(&self) -> String {
+            "test-streaming-model".to_string()
+        }
+
+        async fn generate_text(
+            &mut self,
+            _options: LanguageModelOptions,
+        ) -> Result<LanguageModelResponse> {
+            unreachable!("generate_text is not used in this test")
+        }
+
+        async fn stream_text(&mut self, _options: LanguageModelOptions) -> Result<ProviderStream> {
+            let call_index = self.calls.fetch_add(1, Ordering::SeqCst);
+
+            let chunks = if call_index == 0 {
+                let tool_call = ToolCallInfo {
+                    tool: ToolDetails {
+                        id: "call_1".to_string(),
+                        name: "get_weather".to_string(),
+                    },
+                    input: json!({ "location": "dc" }),
+                    extensions: Default::default(),
+                };
+
+                vec![Ok(vec![
+                    LanguageModelStreamChunk::Delta(LanguageModelStreamChunkType::ToolCallStart(
+                        tool_call.tool.clone(),
+                    )),
+                    LanguageModelStreamChunk::Delta(LanguageModelStreamChunkType::ToolCallDelta {
+                        id: "call_1".to_string(),
+                        delta: "{\"location\":\"dc\"}".to_string(),
+                    }),
+                    LanguageModelStreamChunk::Done(AssistantMessage {
+                        content: LanguageModelResponseContentType::ToolCall(tool_call),
+                        usage: None,
+                    }),
+                ])]
+            } else {
+                vec![Ok(vec![
+                    LanguageModelStreamChunk::Delta(LanguageModelStreamChunkType::TextStart),
+                    LanguageModelStreamChunk::Delta(LanguageModelStreamChunkType::TextDelta(
+                        "done".to_string(),
+                    )),
+                    LanguageModelStreamChunk::Delta(LanguageModelStreamChunkType::TextEnd),
+                    LanguageModelStreamChunk::Done(AssistantMessage {
+                        content: LanguageModelResponseContentType::Text("done".to_string()),
+                        usage: None,
+                    }),
+                ])]
+            };
+
+            Ok(Box::pin(stream::iter(chunks)))
+        }
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+    struct GetWeatherInput {
+        location: String,
+    }
+
+    fn get_weather() -> Tool {
+        Tool {
+            name: "get_weather".to_string(),
+            description: "Get weather for a location".to_string(),
+            input_schema: schemars::schema_for!(GetWeatherInput),
+            execute: ToolExecute::new(Box::new(|params| {
+                let location = params["location"]
+                    .as_str()
+                    .ok_or_else(|| "missing location".to_string())?;
+                Ok(format!("The weather in {location} is sunny"))
+            })),
+        }
+    }
+
+    #[tokio::test]
+    async fn stream_text_emits_tool_input_available_before_tool_result() {
+        let response = LanguageModelRequest::builder()
+            .model(TestStreamingModel {
+                calls: Arc::new(AtomicUsize::new(0)),
+            })
+            .prompt("what is the weather in dc?")
+            .with_tool(get_weather())
+            .build()
+            .stream_text()
+            .await
+            .expect("stream_text should succeed");
+
+        let chunks = response.stream.take(4).collect::<Vec<_>>().await;
+
+        assert!(matches!(
+            chunks.first(),
+            Some(LanguageModelStreamChunkType::ToolCallStart(_))
+        ));
+        assert!(matches!(
+            chunks.get(1),
+            Some(LanguageModelStreamChunkType::ToolCallDelta { .. })
+        ));
+        assert!(matches!(
+            chunks.get(2),
+            Some(LanguageModelStreamChunkType::ToolCallAvailable(_))
+        ));
+        assert!(matches!(
+            chunks.get(3),
+            Some(LanguageModelStreamChunkType::ToolCallEnd(_))
+        ));
     }
 }
