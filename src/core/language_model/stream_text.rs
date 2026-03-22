@@ -171,7 +171,10 @@ impl<M: LanguageModel> LanguageModelRequest<M> {
                                                     ),
                                                 );
 
-                                                options.handle_tool_call(tool_info).await;
+                                                options
+                                                    .handle_tool_call(tool_info, Some(tx.clone()))
+                                                    .await;
+
                                                 // Emit tool result AFTER execution (last message is the result)
                                                 if let Some(TaggedMessage {
                                                     message: Message::Tool(result_info),
@@ -184,6 +187,7 @@ impl<M: LanguageModel> LanguageModelRequest<M> {
                                                         ),
                                                     );
                                                 }
+
                                                 had_tool_call = true;
                                             }
                                             _ => {}
@@ -405,13 +409,13 @@ impl StreamTextResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::LanguageModelRequest;
     use crate::core::capabilities::ToolCallSupport;
     use crate::core::language_model::{
         LanguageModel, LanguageModelOptions, LanguageModelResponse,
         LanguageModelResponseContentType, LanguageModelStreamChunk, ProviderStream,
     };
     use crate::core::tools::{Tool, ToolCallInfo, ToolDetails, ToolExecute};
+    use crate::core::{LanguageModelRequest, ToolContext};
     use crate::error::Result;
     use async_trait::async_trait;
     use futures::{StreamExt, stream};
@@ -497,12 +501,12 @@ mod tests {
             name: "get_weather".to_string(),
             description: "Get weather for a location".to_string(),
             input_schema: schemars::schema_for!(GetWeatherInput),
-            execute: ToolExecute::new(Box::new(|params| {
+            execute: ToolExecute::from_sync(|_ctx: ToolContext, params: serde_json::Value| {
                 let location = params["location"]
                     .as_str()
                     .ok_or_else(|| "missing location".to_string())?;
                 Ok(format!("The weather in {location} is sunny"))
-            })),
+            }),
         }
     }
 

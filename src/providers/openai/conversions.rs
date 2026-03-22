@@ -325,7 +325,7 @@ mod tests {
             .name("sum")
             .description("Adds two numbers")
             .input_schema(schema_for!(SumInput))
-            .execute(ToolExecute::new(Box::new(|_| Ok("3".to_string()))))
+            .execute(ToolExecute::from_sync(|_, _| Ok("3".to_string())))
             .build()
             .expect("tool should build");
 

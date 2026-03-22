@@ -14,10 +14,7 @@ pub mod stream_text;
 
 use crate::core::messages::{AssistantMessage, TaggedMessage, TaggedMessageHelpers};
 use crate::core::tools::{ToolDetails, ToolList};
-use crate::core::{
-    Message,
-    tools::{ToolCallInfo, ToolResultInfo},
-};
+use crate::core::{Message, ToolCallInfo, ToolContext, ToolResultInfo};
 use crate::core::{Messages, utils};
 use crate::error::{Error, Result};
 use async_trait::async_trait;
@@ -290,13 +287,21 @@ impl LanguageModelOptions {
     }
 
     /// Executes a tool call and adds the result to the message history.
-    pub(crate) async fn handle_tool_call(&mut self, input: &ToolCallInfo) -> &mut Self {
+    pub(crate) async fn handle_tool_call(
+        &mut self,
+        input: &ToolCallInfo,
+        stream_tx: Option<UnboundedSender<LanguageModelStreamChunkType>>,
+    ) -> &mut Self {
         if let Some(tools) = &self.tools {
-            let tool_result_task = tools.execute(input.clone()).await;
-            let tool_result = tool_result_task
-                .await
-                .map_err(|err| Error::ToolCallError(format!("Error executing tool: {err}")))
-                .and_then(|result| result);
+            let tool_result = tools
+                .execute(
+                    match stream_tx {
+                        Some(tx) => ToolContext::new(self.clone()).with_stream_tx(tx),
+                        None => ToolContext::new(self.clone()),
+                    },
+                    input.clone(),
+                )
+                .await;
 
             let mut tool_output_infos = Vec::new();
 
@@ -543,6 +548,16 @@ pub enum LanguageModelStreamChunkType {
     Incomplete(String),
     /// Feature not supported by the provider.
     NotSupported(String),
+}
+
+impl LanguageModelStreamChunkType {
+    /// Returns `true` if the language model stream chunk type is [`ToolCallStart`].
+    ///
+    /// [`ToolCallStart`]: LanguageModelStreamChunkType::ToolCallStart
+    #[must_use]
+    pub fn is_tool_call_start(&self) -> bool {
+        matches!(self, Self::ToolCallStart(..))
+    }
 }
 
 /// A chunk of data from a streaming language model response.

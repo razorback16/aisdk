@@ -12,30 +12,90 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::collections::HashMap;
 use std::pin::Pin;
+use std::sync::OnceLock;
 use std::time::Duration;
 
 /// Configuration for retry behavior on API requests.
 #[derive(Debug, Clone)]
 struct RetryConfig {
-    /// Maximum number of retry attempts (default: 5)
+    /// Maximum number of retry attempts (default: 3).
     max_retries: u32,
-    /// Initial wait time before first retry (default: 1 second)
+
+    /// Initial wait time before first retry (default: 500ms).
     initial_wait: Duration,
-    /// Maximum wait time between retries (default: 30 seconds)
+
+    /// Maximum wait time between retries (default: 20 seconds).
     max_wait: Duration,
-    /// Whether to add jitter to backoff (default: true)
+    /// Whether to add jitter to backoff (default: true).
+
+    #[allow(dead_code)]
+    /// Whether to add jitter to backoff.
+    /// turn on the `jitter` feature to use (pulls in `fastrand`).
     use_jitter: bool,
 }
 
 impl Default for RetryConfig {
     fn default() -> Self {
         Self {
-            max_retries: 5,
-            initial_wait: Duration::from_secs(1),
-            max_wait: Duration::from_secs(30),
+            max_retries: 3,
+            initial_wait: Duration::from_millis(500),
+            max_wait: Duration::from_secs(20),
             use_jitter: true,
         }
     }
+}
+
+/// Shared `reqwest::Client` for non-streaming requests (has a 180s response timeout).
+#[allow(dead_code)]
+static HTTP_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+
+/// Shared `reqwest::Client` for streaming requests (no response timeout).
+#[allow(dead_code)]
+static HTTP_STREAMING_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+
+// TODO: reasoning for two different clients in connection pooling is not
+// working during tests. make sure to fix this later.
+//
+/// Returns the shared HTTP client for non-streaming requests.
+#[allow(dead_code)]
+#[cfg(not(feature = "test-access"))]
+fn get_client() -> &'static reqwest::Client {
+    HTTP_CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .pool_max_idle_per_host(32)
+            .pool_idle_timeout(Duration::from_secs(120))
+            .tcp_keepalive(Duration::from_secs(30))
+            .connect_timeout(Duration::from_secs(5))
+            .timeout(Duration::from_secs(180))
+            .build()
+            .expect("Failed to build shared HTTP client")
+    })
+}
+
+/// Returns the shared HTTP client for streaming requests.
+/// Identical to [`get_client`] except `.timeout()` is intentionally omitted for streaming.
+#[allow(dead_code)]
+#[cfg(not(feature = "test-access"))]
+fn get_streaming_client() -> &'static reqwest::Client {
+    HTTP_STREAMING_CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .pool_max_idle_per_host(32)
+            .pool_idle_timeout(Duration::from_secs(120))
+            .tcp_keepalive(Duration::from_secs(30))
+            .connect_timeout(Duration::from_secs(5))
+            .build()
+            .expect("Failed to build shared HTTP streaming client")
+    })
+}
+
+#[cfg(feature = "test-access")]
+fn get_client() -> reqwest::Client {
+    reqwest::Client::new()
+}
+
+#[cfg(feature = "test-access")]
+fn get_streaming_client() -> reqwest::Client {
+    reqwest::Client::new()
 }
 
 /// Checks if a status code is retryable.
@@ -80,23 +140,21 @@ fn calculate_backoff(
         .saturating_mul(2_u32.saturating_pow(retry_count));
     let backoff = backoff.min(config.max_wait);
 
-    // Add jitter to prevent thundering herd (±10% of backoff time)
+    // Add jitter to prevent thundering herd (±10% of backoff time).
+    // Requires the `jitter` feature (pulls in `fastrand`).
+    #[cfg(feature = "jitter")]
     if config.use_jitter {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos();
-        let jitter_pct = ((now % 200) as i64 - 100) as f64 / 1000.0; // Range: -0.1 to +0.1
+        let jitter_pct = fastrand::i64(-100..=100) as f64 / 1000.0; // Range: -0.1 to +0.1
         let jitter_ms = (backoff.as_millis() as f64 * jitter_pct) as i64;
 
-        if jitter_ms >= 0 {
+        return if jitter_ms >= 0 {
             backoff.saturating_add(Duration::from_millis(jitter_ms as u64))
         } else {
             backoff.saturating_sub(Duration::from_millis((-jitter_ms) as u64))
-        }
-    } else {
-        backoff
+        };
     }
+
+    backoff
 }
 
 /// Shared retry logic for HTTP requests.
@@ -105,7 +163,8 @@ fn calculate_backoff(
 /// - Exponential backoff with configurable limits
 /// - Jitter to prevent thundering herd
 /// - Retry-After header parsing
-/// - Retryable error detection (429, 502, 503, 504)
+/// - Retryable HTTP status codes (429, 502, 503, 504)
+/// - Retryable transport errors (timeout, connection failure)
 /// - Request body reconstruction on each retry
 async fn retry_request<F, T>(
     url: reqwest::Url,
@@ -119,38 +178,43 @@ where
     F: Fn() -> reqwest::Body,
     T: DeserializeOwned + std::fmt::Debug,
 {
-    let client = reqwest::Client::new();
+    let client = get_client();
     let mut retry_count = 0;
 
     loop {
-        // Reconstruct body for each attempt to avoid consumption issues
         let body = body_fn();
 
-        let resp = client
+        let resp = match client
             .request(method.clone(), url.clone())
             .headers(headers.clone())
             .query(&query_params)
             .body(body)
             .send()
             .await
-            .map_err(|e| {
-                // Check if error is retryable (timeout, connection error, etc.)
-                if e.is_timeout() || e.is_connect() {
-                    log::warn!(
-                        "Request failed with retryable error (attempt {}/{}): {}",
-                        retry_count + 1,
-                        config.max_retries + 1,
-                        e
-                    );
-                } else {
-                    log::error!("Request failed: {e}");
-                }
-
-                Error::ApiError {
+        {
+            Ok(r) => r,
+            // retry none HTTP-level errors (timeout, connection refused)
+            Err(e) if (e.is_timeout() || e.is_connect()) && retry_count < config.max_retries => {
+                let wait_time = calculate_backoff(retry_count, &config, None);
+                retry_count += 1;
+                log::warn!(
+                    "Request failed with retryable error (attempt {}/{}): {}. Retrying after {:?}...",
+                    retry_count,
+                    config.max_retries + 1,
+                    e,
+                    wait_time
+                );
+                tokio::time::sleep(wait_time).await;
+                continue;
+            }
+            Err(e) => {
+                log::error!("Request failed: {e}");
+                return Err(Error::ApiError {
                     status_code: e.status(),
                     details: e.to_string(),
-                }
-            })?;
+                });
+            }
+        };
 
         let status = resp.status();
         let response_headers = resp.headers().clone();
@@ -169,11 +233,10 @@ where
 
         // Check if error is retryable and we have retries left
         if is_retryable_status(status) && retry_count < config.max_retries {
-            retry_count += 1;
-
             // Parse Retry-After header if present
             let retry_after = parse_retry_after(&response_headers);
-            let wait_time = calculate_backoff(retry_count - 1, &config, retry_after);
+            let wait_time = calculate_backoff(retry_count, &config, retry_after);
+            retry_count += 1;
 
             log::warn!(
                 "Request failed with status {} (attempt {}/{}). Retrying after {:?}...",
@@ -320,7 +383,7 @@ pub(crate) trait LanguageModelClient {
         Self::StreamEvent: Send + 'static,
         Self: Sync,
     {
-        let client = reqwest::Client::new();
+        let client = get_streaming_client();
 
         let url = join_url(base_url, &self.path())?;
 
@@ -576,9 +639,10 @@ mod tests {
     }
 
     // ========================================================================
-    // Tests for Exponential Backoff with Jitter
+    // Tests for Exponential Backoff with Jitter (requires `jitter` feature)
     // ========================================================================
 
+    #[cfg(feature = "jitter")]
     #[test]
     fn test_calculate_backoff_with_jitter_within_range() {
         let config = test_config(5, 1000, 30000, true);
@@ -596,6 +660,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "jitter")]
     #[test]
     fn test_calculate_backoff_with_jitter_different_retry_counts() {
         let config = test_config(5, 1000, 30000, true);
@@ -617,6 +682,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "jitter")]
     #[test]
     fn test_calculate_backoff_jitter_respects_max_wait() {
         let config = test_config(5, 1000, 10000, true);
@@ -624,29 +690,22 @@ mod tests {
         // Base would be 16000ms, but max_wait is 10000ms
         let result = calculate_backoff(4, &config, None);
 
-        // Even with jitter, should never exceed max_wait
-        // Actually, the current implementation caps BEFORE jitter,
-        // so it should be around 10000 ± 10% = 9000-11000ms
-        // Let's be conservative and check it's close to 10000ms
+        // The implementation caps BEFORE jitter, so the result can be up to ±10%
+        // of max_wait: 9000ms to 11000ms.
         assert!(
             result >= Duration::from_millis(9000) && result <= Duration::from_millis(11000),
             "Result {result:?} should be around 10000ms ±10%"
         );
     }
 
+    #[cfg(feature = "jitter")]
     #[test]
-    fn test_calculate_backoff_jitter_deterministic_within_run() {
+    fn test_calculate_backoff_jitter_independent_calls_in_range() {
         let config = test_config(5, 1000, 30000, true);
 
-        // Multiple calls in quick succession should give different results
-        // due to changing timestamp nanoseconds
         let result1 = calculate_backoff(2, &config, None);
-        std::thread::sleep(Duration::from_nanos(100)); // Tiny sleep to change timestamp
         let result2 = calculate_backoff(2, &config, None);
 
-        // Results might be the same if called at exactly the same nanosecond,
-        // but they're likely different. Just verify both are in valid range.
-        let _base = Duration::from_millis(4000);
         let min = Duration::from_millis(3600);
         let max = Duration::from_millis(4400);
 
@@ -654,6 +713,7 @@ mod tests {
         assert!(result2 >= min && result2 <= max);
     }
 
+    #[cfg(feature = "jitter")]
     #[test]
     fn test_calculate_backoff_jitter_at_zero_retry_count() {
         let config = test_config(5, 1000, 30000, true);
@@ -743,6 +803,7 @@ mod tests {
         assert_eq!(result, Duration::from_millis(60000));
     }
 
+    #[cfg(feature = "jitter")]
     #[test]
     fn test_calculate_backoff_jitter_with_zero_base() {
         let config = test_config(5, 0, 30000, true);
@@ -752,6 +813,7 @@ mod tests {
         assert_eq!(result, Duration::from_millis(0));
     }
 
+    #[cfg(feature = "jitter")]
     #[test]
     fn test_calculate_backoff_jitter_with_very_small_base() {
         let config = test_config(5, 10, 30000, true);
