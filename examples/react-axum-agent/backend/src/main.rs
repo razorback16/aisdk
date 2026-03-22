@@ -4,6 +4,8 @@ use aisdk::{
     providers::Google,
 };
 
+mod tools;
+
 // Example handler function
 async fn chat_handler(axum::Json(request): axum::Json<VercelUIRequest>) -> AxumSseResponse {
     println!("Request: {:?}", request);
@@ -14,7 +16,9 @@ async fn chat_handler(axum::Json(request): axum::Json<VercelUIRequest>) -> AxumS
     // Generate streaming response
     let response = LanguageModelRequest::builder()
         .model(Google::gemini_2_5_flash())
+        .system("You are a helpful assistant.")
         .messages(messages)
+        .with_tool(tools::get_weather())
         .build()
         .stream_text()
         .await;
