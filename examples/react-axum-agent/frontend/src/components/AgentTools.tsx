@@ -1,9 +1,17 @@
 import { Cpu, Wrench, Loader2, CheckCircle2, AlertCircle } from "lucide-react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import rehypeHighlight from "rehype-highlight";
 
 export function ChatMessageText({ text }: { text: string }) {
   return (
-    <div className="prose prose-invert prose-p:leading-relaxed max-w-none text-zinc-200 wrap-break-word">
-      <span className="whitespace-pre-wrap">{text}</span>
+    <div className="prose prose-invert prose-p:leading-relaxed prose-pre:bg-zinc-900 prose-pre:border prose-pre:border-zinc-800 max-w-none text-zinc-200 wrap-break-word">
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        rehypePlugins={[rehypeHighlight]}
+      >
+        {text}
+      </ReactMarkdown>
     </div>
   );
 }
@@ -45,12 +53,18 @@ export function ToolInput({ input }: { input: unknown }) {
   );
 }
 
+const MAX_OUTPUT_LENGTH = 500;
+
 export function ToolResult({ output }: { output: unknown }) {
+  const content =
+    typeof output === "string" ? output : JSON.stringify(output, null, 2);
+  const truncated = content.length > MAX_OUTPUT_LENGTH;
+
   return (
     <div className="flex gap-2 text-zinc-500 pl-4 border-l-2 border-emerald-900/30 py-1">
       <Wrench className="w-3.5 h-3.5 mt-0.5 shrink-0 opacity-50" />
       <pre className="whitespace-pre-wrap break-all overflow-x-auto text-zinc-400">
-        {typeof output === "string" ? output : JSON.stringify(output, null, 2)}
+        {truncated ? content.slice(0, MAX_OUTPUT_LENGTH) + "..." : content}
       </pre>
     </div>
   );

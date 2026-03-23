@@ -1,39 +1,40 @@
 use aisdk::{
-    core::LanguageModelRequest,
+    core::{LanguageModelRequest, Tool},
     integrations::{axum::AxumSseResponse, vercel_aisdk_ui::VercelUIRequest},
+    macros::tool,
     providers::Google,
 };
 
-mod tools;
-
 // Example handler function
 async fn chat_handler(axum::Json(request): axum::Json<VercelUIRequest>) -> AxumSseResponse {
-    println!("Request: {:?}", request);
-
     // Convert the Message sent by the frontend to AISDK.rs Messages
     let messages = request.into();
 
     // Generate streaming response
     let response = LanguageModelRequest::builder()
         .model(Google::gemini_2_5_flash())
-        .system("You are a helpful assistant.")
+        .system("You are helpful assistant. who explains topics about the aisdk.rs library.")
         .messages(messages)
-        .with_tool(tools::get_weather())
+        .with_tool(web_fetch())
         .build()
         .stream_text()
         .await;
 
     match response {
-        Ok(response) => {
-            println!("sending response chunk to client");
-
-            // Convert to Axum SSE response (Vercel UI compatible)
-            response.into()
-        }
-        Err(err) => {
-            panic!("Error: {:?}", err);
-        }
+        Ok(response) => response.into(), // Convert to Axum SSE response (Vercel UI compatible)
+        Err(err) => panic!("Error: {:?}", err),
     }
+}
+
+#[tool]
+/// Fetches content from a URL on https://aisdk.rs/docs/ to get the latest version of the SDK documentation
+/// Use .mdx extension for markdown format
+/// example: https://aisdk.rs/docs/concepts/generating-text.mdx or
+/// just https://aisdk.rs/docs/concepts/generating-text to get the html content
+async fn web_fetch(url: String) -> Tool {
+    let response = reqwest::get(&url).await.map_err(|e| e.to_string())?;
+    let body = response.text().await.map_err(|e| e.to_string())?;
+    Ok(body)
 }
 
 #[tokio::main]

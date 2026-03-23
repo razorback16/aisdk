@@ -114,6 +114,7 @@ dependencies = [
  "aisdk",
  "axum",
  "dotenv",
+ "reqwest",
  "tokio",
  "tower-http",
 ]
