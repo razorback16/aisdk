@@ -2,6 +2,8 @@
 
 A full-stack AI chat app built with **React** and **Axum (Rust)**, demonstrating streaming responses, tool calling with `aisdk.rs`, and integration with the [Vercel AI SDK UI](https://ai-sdk.dev/docs/ai-sdk-ui/chatbot).
 
+![aisdkdemo](https://github.com/user-attachments/assets/e4b6f068-ff81-4190-a80a-9d3040c1a9bf)
+
 ## What It Shows
 
 * **Tool calling with `#[tool]`**:
