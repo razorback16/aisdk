@@ -29,6 +29,8 @@ Changelog entries are grouped by type, with the following types:
 - Added support for `#[tool] pub async fn ...` tool bodies.
 - Added `ToolContext` for tools, enabling runtime-aware execution and access to `LanguageModelOptions`.
 - Added optional tool stream sender support in `ToolContext`, allowing tools to emit `LanguageModelStreamChunkType` from the tool body.
+- Added new `LanguageModelStreamChunkType` chunk types: `ReasoningStart`, `ReasoningDelta`, `ReasoningEnd`, `ToolCallStart`, `ToolCallDelta`, `ToolCallAvailable`, and `ToolCallEnd`
+- Added ToolCall progress stream support for vercel-ai-sdk-ui integration.
 
 ### Changed
 
@@ -36,6 +38,7 @@ Changelog entries are grouped by type, with the following types:
 - `ToolExecute::call(...)` is now async and must be awaited. This is a breaking change for direct callers of the tool executor API.
 - `ToolList::execute(...)` and `ToolExecute::call(...)` is now async, takes `ToolContext` as the first parameter as the first parameter for runtime-aware execution.
 - Removed `ToolExecute::new(...)` in favor of the explicit `from_sync(...)` and `from_async(...)` constructors.
+- `Start` and `End` language model stream chunk types are now `TextStart` and `TextEnd`.
 
 ## [0.5.2] - 2026-02-25
 
