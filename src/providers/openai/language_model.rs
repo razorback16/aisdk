@@ -105,7 +105,7 @@ async fn generate_text_via_stream<M: ModelName>(
     while let Some(event) = stream.next().await {
         for chunk in event? {
             match chunk {
-                LanguageModelStreamChunk::Delta(LanguageModelStreamChunkType::Text(delta)) => {
+                LanguageModelStreamChunk::Delta(LanguageModelStreamChunkType::TextDelta(delta)) => {
                     buffered_text.push_str(&delta);
                 }
                 LanguageModelStreamChunk::Done(message) => {

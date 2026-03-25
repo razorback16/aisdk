@@ -31,8 +31,6 @@ impl<M: ModelName> LanguageModel for Vllm<M> {
         &mut self,
         options: LanguageModelOptions,
     ) -> Result<LanguageModelResponse> {
-        let additional_headers = options.headers.clone();
-
         // Build vLLM-specific reasoning kwargs before converting options
         let (chat_template_kwargs, include_reasoning) =
             build_reasoning_kwargs(options.reasoning_effort.as_ref(), &self.settings);
@@ -45,7 +43,7 @@ impl<M: ModelName> LanguageModel for Vllm<M> {
         self.inner.options = opts;
 
         let response: types::VllmChatCompletionsResponse = self
-            .send(&self.settings.base_url, additional_headers)
+            .send(&self.settings.base_url)
             .await?;
 
         let mut contents = Vec::new();
@@ -89,8 +87,6 @@ impl<M: ModelName> LanguageModel for Vllm<M> {
     }
 
     async fn stream_text(&mut self, options: LanguageModelOptions) -> Result<ProviderStream> {
-        let additional_headers = options.headers.clone();
-
         // Build vLLM-specific reasoning kwargs before converting options
         let (chat_template_kwargs, include_reasoning) =
             build_reasoning_kwargs(options.reasoning_effort.as_ref(), &self.settings);
@@ -108,7 +104,7 @@ impl<M: ModelName> LanguageModel for Vllm<M> {
         self.inner.options = opts;
 
         let stream = self
-            .send_and_stream(&self.settings.base_url, additional_headers)
+            .send_and_stream(&self.settings.base_url)
             .await?;
 
         // State for accumulating tool calls across chunks
@@ -151,7 +147,7 @@ impl<M: ModelName> LanguageModel for Vllm<M> {
                         && !reasoning.is_empty()
                     {
                         results.push(LanguageModelStreamChunk::Delta(
-                            LanguageModelStreamChunkType::Reasoning(reasoning),
+                            LanguageModelStreamChunkType::ReasoningDelta(reasoning),
                         ));
                     }
 
@@ -160,7 +156,7 @@ impl<M: ModelName> LanguageModel for Vllm<M> {
                         && !content.is_empty()
                     {
                         results.push(LanguageModelStreamChunk::Delta(
-                            LanguageModelStreamChunkType::Text(content),
+                            LanguageModelStreamChunkType::TextDelta(content),
                         ));
                     }
 
@@ -191,15 +187,9 @@ impl<M: ModelName> LanguageModel for Vllm<M> {
                                     } else {
                                         entry.0.clone()
                                     };
-                                    let tool_name = if entry.1.is_empty() {
-                                        "unknown".to_string()
-                                    } else {
-                                        entry.1.clone()
-                                    };
                                     results.push(LanguageModelStreamChunk::Delta(
                                         LanguageModelStreamChunkType::ToolCallDelta {
-                                            tool_call_id,
-                                            tool_name,
+                                            id: tool_call_id,
                                             delta: args,
                                         },
                                     ));

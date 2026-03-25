@@ -14,7 +14,7 @@ use futures::Stream;
 use futures::StreamExt;
 use reqwest::header::CONTENT_TYPE;
 use reqwest_eventsource::{Event, RequestBuilderExt};
-use std::collections::HashMap;
+
 use std::pin::Pin;
 
 impl<M: ModelName> LanguageModelClient for OpenAI<M> {
@@ -107,7 +107,6 @@ impl<M: ModelName> LanguageModelClient for OpenAI<M> {
     async fn send_and_stream(
         &self,
         base_url: impl reqwest::IntoUrl,
-        additional_headers: Option<HashMap<String, String>>,
     ) -> crate::error::Result<
         Pin<Box<dyn Stream<Item = crate::error::Result<Self::StreamEvent>> + Send>>,
     >
@@ -119,12 +118,7 @@ impl<M: ModelName> LanguageModelClient for OpenAI<M> {
         let is_chatgpt_codex =
             url.as_str().contains("chatgpt.com/backend-api/codex") || url.path() == "/responses";
 
-        let mut headers = LanguageModelClient::headers(self);
-        if let Some(extra) = additional_headers {
-            let extra_map = reqwest::header::HeaderMap::try_from(&extra)
-                .map_err(|e| Error::InvalidInput(format!("Invalid headers: {}", e)))?;
-            headers.extend(extra_map);
-        }
+        let headers = LanguageModelClient::headers(self)?;
 
         if !is_chatgpt_codex {
             let client = reqwest::Client::new();
@@ -132,7 +126,7 @@ impl<M: ModelName> LanguageModelClient for OpenAI<M> {
                 .request(LanguageModelClient::method(self), url.clone())
                 .headers(headers)
                 .query(&LanguageModelClient::query_params(self))
-                .body(LanguageModelClient::body(self))
+                .body(LanguageModelClient::body(self)?)
                 .eventsource()
                 .map_err(|e| Error::ApiError {
                     status_code: None,
@@ -159,7 +153,7 @@ impl<M: ModelName> LanguageModelClient for OpenAI<M> {
             .request(LanguageModelClient::method(self), url)
             .headers(headers)
             .query(&LanguageModelClient::query_params(self))
-            .body(LanguageModelClient::body(self))
+            .body(LanguageModelClient::body(self)?)
             .send()
             .await
             .map_err(|e| Error::ApiError {

@@ -37,10 +37,12 @@ impl From<LanguageModelOptions> for client::OpenAILanguageModelOptions {
     fn from(options: LanguageModelOptions) -> Self {
         let extra_body = options.body.clone();
         let extra_headers = options.headers.clone();
-        let items: Vec<types::InputItem> = options
+        let has_system_message = options
             .messages
             .iter()
             .any(|message| matches!(message.message, Message::System(_)));
+
+        let mut items: Vec<types::InputItem> = Vec::new();
 
         if !has_system_message && let Some(system) = options.system.as_ref() {
             let trimmed = system.trim();

@@ -31,7 +31,7 @@ impl<M: ModelName> LanguageModelClient for Vllm<M> {
         reqwest::Method::POST
     }
 
-    fn headers(&self) -> reqwest::header::HeaderMap {
+    fn headers(&self) -> crate::error::Result<reqwest::header::HeaderMap> {
         let mut headers = reqwest::header::HeaderMap::new();
         headers.insert(CONTENT_TYPE, "application/json".parse().unwrap());
 
@@ -44,14 +44,14 @@ impl<M: ModelName> LanguageModelClient for Vllm<M> {
             );
         }
 
-        headers
+        Ok(headers)
     }
 
     fn query_params(&self) -> Vec<(&str, &str)> {
         Vec::new()
     }
 
-    fn body(&self) -> reqwest::Body {
+    fn body(&self) -> crate::error::Result<reqwest::Body> {
         // Serialize the inner OpenAI options
         let mut body: serde_json::Value = serde_json::to_value(&self.inner.options).unwrap();
 
@@ -75,7 +75,7 @@ impl<M: ModelName> LanguageModelClient for Vllm<M> {
             }
         }
 
-        reqwest::Body::from(serde_json::to_string(&body).unwrap())
+        Ok(reqwest::Body::from(serde_json::to_string(&body).unwrap()))
     }
 
     fn parse_stream_sse(
