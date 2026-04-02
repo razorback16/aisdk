@@ -42,6 +42,9 @@ pub(crate) struct AnthropicOptions {
     pub tools: Option<Vec<AnthropicTool>>,
     #[builder(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_choice: Option<AnthropicToolChoice>,
+    #[builder(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub top_k: Option<u32>,
     #[builder(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -79,7 +82,35 @@ impl<M: ModelName> LanguageModelClient for Anthropic<M> {
         // Default headers
         let mut default_headers = reqwest::header::HeaderMap::new();
         default_headers.insert(CONTENT_TYPE, "application/json".parse().unwrap());
-        default_headers.insert("x-api-key", self.settings.api_key.parse().unwrap());
+
+        if self.settings.use_oauth {
+            // OAuth: use Authorization: Bearer instead of x-api-key
+            default_headers.insert(
+                "authorization",
+                format!("Bearer {}", self.settings.api_key).parse().unwrap(),
+            );
+            // Beta flags required for Claude Code OAuth access.
+            default_headers.insert(
+                "anthropic-beta",
+                [
+                    "claude-code-20250219",
+                    "oauth-2025-04-20",
+                    "interleaved-thinking-2025-05-14",
+                    "prompt-caching-scope-2026-01-05",
+                    "context-management-2025-06-27",
+                ]
+                .join(",")
+                .parse()
+                .unwrap(),
+            );
+            default_headers.insert(
+                "x-client-request-id",
+                uuid::Uuid::new_v4().to_string().parse().unwrap(),
+            );
+        } else {
+            default_headers.insert("x-api-key", self.settings.api_key.parse().unwrap());
+        }
+
         default_headers.insert("anthropic-version", ANTHROPIC_API_VERSION.parse().unwrap());
 
         merge_headers(
@@ -94,11 +125,51 @@ impl<M: ModelName> LanguageModelClient for Anthropic<M> {
     }
 
     fn body(&self) -> crate::error::Result<reqwest::Body> {
-        merge_body(
+        let body = merge_body(
             &self.options,
             self.settings.body.as_ref(),
             self.options.extra_body.as_ref(),
-        )
+        )?;
+
+        if !self.settings.use_oauth {
+            return Ok(body);
+        }
+
+        // For OAuth: convert `system` from a plain string to an array of
+        // TextBlockParam objects with the Claude Code prefix as the first block.
+        // The API requires this format for Sonnet/Opus access with OAuth tokens.
+        let body_bytes = body
+            .as_bytes()
+            .ok_or_else(|| Error::Other("Cannot read body bytes".to_string()))?
+            .to_vec();
+        let mut json: serde_json::Value = serde_json::from_slice(&body_bytes)
+            .map_err(|e| Error::Other(format!("Failed to parse body: {e}")))?;
+
+        const CLAUDE_CODE_PREFIX: &str =
+            "You are Claude Code, Anthropic's official CLI for Claude.";
+        let cache_ctl = serde_json::json!({"type": "ephemeral"});
+
+        if let Some(system_str) = json
+            .get("system")
+            .and_then(|s| s.as_str())
+            .map(String::from)
+        {
+            let blocks = serde_json::json!([
+                {"type": "text", "text": CLAUDE_CODE_PREFIX, "cache_control": cache_ctl},
+                {"type": "text", "text": system_str, "cache_control": cache_ctl}
+            ]);
+            json["system"] = blocks;
+        } else if json.get("system").is_none() {
+            let blocks = serde_json::json!([
+                {"type": "text", "text": CLAUDE_CODE_PREFIX, "cache_control": cache_ctl}
+            ]);
+            json["system"] = blocks;
+        }
+        // If system is already an array, leave it as-is.
+
+        let out = serde_json::to_vec(&json)
+            .map_err(|e| Error::Other(format!("Failed to encode body: {e}")))?;
+        Ok(reqwest::Body::from(out))
     }
 
     fn parse_stream_sse(

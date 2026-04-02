@@ -32,6 +32,11 @@ pub struct AnthropicProviderSettings {
     #[serde(skip)]
     #[builder(setter(skip))]
     pub body: Option<serde_json::Map<String, serde_json::Value>>,
+
+    /// When true, use OAuth Bearer token authentication instead of x-api-key.
+    /// This sends `Authorization: Bearer {api_key}` and adds the required
+    /// `anthropic-beta` flags for Claude Code OAuth access.
+    pub use_oauth: bool,
 }
 
 impl Default for AnthropicProviderSettings {
@@ -44,6 +49,7 @@ impl Default for AnthropicProviderSettings {
             path: None,
             headers: None,
             body: None,
+            use_oauth: false,
         }
     }
 }

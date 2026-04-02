@@ -42,9 +42,8 @@ impl<M: ModelName> LanguageModel for Vllm<M> {
         opts.model = self.inner.options.model.clone();
         self.inner.options = opts;
 
-        let response: types::VllmChatCompletionsResponse = self
-            .send(&self.settings.base_url)
-            .await?;
+        let response: types::VllmChatCompletionsResponse =
+            self.send(&self.settings.base_url).await?;
 
         let mut contents = Vec::new();
 
@@ -103,9 +102,7 @@ impl<M: ModelName> LanguageModel for Vllm<M> {
         });
         self.inner.options = opts;
 
-        let stream = self
-            .send_and_stream(&self.settings.base_url)
-            .await?;
+        let stream = self.send_and_stream(&self.settings.base_url).await?;
 
         // State for accumulating tool calls across chunks
         use std::collections::HashMap;

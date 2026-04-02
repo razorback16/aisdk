@@ -117,6 +117,9 @@ impl<M: LanguageModel> LanguageModelRequest<M> {
                     match chunk {
                         Ok(chunk) => {
                             let mut had_tool_call = false;
+                            // First pass: collect all Done chunks, forward Deltas,
+                            // and batch tool calls for deferred execution.
+                            let mut pending_tool_calls: Vec<ToolCallInfo> = Vec::new();
                             for output in chunk {
                                 match output {
                                     LanguageModelStreamChunk::Done(final_msg) => {
@@ -153,10 +156,12 @@ impl<M: LanguageModel> LanguageModelRequest<M> {
                                             LanguageModelResponseContentType::ToolCall(
                                                 ref tool_info,
                                             ) => {
-                                                // add tool message
+                                                // Add assistant message with tool call (all
+                                                // consecutive so Anthropic merges them into
+                                                // one assistant message).
                                                 let usage = final_msg.usage.clone();
-                                                let _ = &options.messages.push(TaggedMessage::new(
-                                                    current_step_id.to_owned(),
+                                                options.messages.push(TaggedMessage::new(
+                                                    current_step_id,
                                                     Message::Assistant(AssistantMessage::new(
                                                         LanguageModelResponseContentType::ToolCall(
                                                             tool_info.clone(),
@@ -171,31 +176,11 @@ impl<M: LanguageModel> LanguageModelRequest<M> {
                                                     ),
                                                 );
 
-                                                options
-                                                    .handle_tool_call(tool_info, Some(tx.clone()))
-                                                    .await;
-
-                                                // Emit tool result AFTER execution (last message is the result)
-                                                if let Some(TaggedMessage {
-                                                    message: Message::Tool(result_info),
-                                                    ..
-                                                }) = options.messages.last()
-                                                {
-                                                    let _ = tx.send(
-                                                        LanguageModelStreamChunkType::ToolCallEnd(
-                                                            result_info.clone(),
-                                                        ),
-                                                    );
-                                                }
-
-                                                had_tool_call = true;
+                                                // Defer execution — collect now, execute after all
+                                                // Done chunks are processed.
+                                                pending_tool_calls.push(tool_info.clone());
                                             }
                                             _ => {}
-                                        }
-
-                                        // Finish the step
-                                        if let Some(ref hook) = options.on_step_finish {
-                                            hook(&options);
                                         }
 
                                         // Stop If
@@ -215,6 +200,34 @@ impl<M: LanguageModel> LanguageModelRequest<M> {
                                     }
                                 }
                             }
+
+                            // Second pass: execute all collected tool calls.
+                            // Tool result messages are now consecutive after all
+                            // assistant tool-call messages, matching Anthropic's
+                            // expected format.
+                            for tool_info in &pending_tool_calls {
+                                options.handle_tool_call(tool_info, Some(tx.clone())).await;
+
+                                if let Some(TaggedMessage {
+                                    message: Message::Tool(result_info),
+                                    ..
+                                }) = options.messages.last()
+                                {
+                                    let _ = tx.send(LanguageModelStreamChunkType::ToolCallEnd(
+                                        result_info.clone(),
+                                    ));
+                                }
+
+                                had_tool_call = true;
+                            }
+
+                            // Finish the step (after all tools in the batch)
+                            if (!pending_tool_calls.is_empty() || options.stop_reason.is_some())
+                                && let Some(ref hook) = options.on_step_finish
+                            {
+                                hook(&options);
+                            }
+
                             // Prioritize continued tool call execution over text finishes
                             if had_tool_call
                                 && matches!(options.stop_reason, Some(StopReason::Finish))

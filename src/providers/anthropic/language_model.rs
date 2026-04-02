@@ -19,7 +19,7 @@ use crate::providers::anthropic::extensions;
 use crate::{core::language_model::LanguageModel, error::Result};
 use async_trait::async_trait;
 use futures::StreamExt;
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 #[async_trait]
 impl<M: ModelName> LanguageModel for Anthropic<M> {
@@ -116,7 +116,7 @@ impl<M: ModelName> LanguageModel for Anthropic<M> {
 
         #[derive(Default)]
         struct StreamState {
-            content_blocks: HashMap<usize, AccumulatedBlock>,
+            content_blocks: BTreeMap<usize, AccumulatedBlock>,
             usage: Option<AnthropicMessageDeltaUsage>,
         }
 
@@ -248,7 +248,7 @@ impl<M: ModelName> LanguageModel for Anthropic<M> {
                                     Some(AccumulatedBlock::Text(_)) => Some(Ok(vec![LanguageModelStreamChunk::Delta(LanguageModelStreamChunkType::TextEnd)])),
                                     Some(AccumulatedBlock::Thinking { .. }) => Some(Ok(vec![LanguageModelStreamChunk::Delta(LanguageModelStreamChunkType::ReasoningEnd)])),
                                     Some(AccumulatedBlock::RedactedThinking(_)) => Some(Ok(vec![LanguageModelStreamChunk::Delta(LanguageModelStreamChunkType::NotSupported("RedactedThinking".to_string()))])),
-                                    Some(AccumulatedBlock::ToolUse { .. }) => None,
+                                    Some(AccumulatedBlock::ToolUse { .. }) => Some(Ok(vec![])),
                                     None => Some(Ok(vec![LanguageModelStreamChunk::Delta(LanguageModelStreamChunkType::Failed("An end chunk returned for an improperly initialized stream".to_string()))])),
                                 }
                             }

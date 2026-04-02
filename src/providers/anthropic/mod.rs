@@ -188,6 +188,15 @@ impl<M: ModelName> AnthropicBuilder<M> {
         self
     }
 
+    /// Enables OAuth Bearer token authentication instead of x-api-key.
+    ///
+    /// When enabled, the provider sends `Authorization: Bearer {api_key}` and
+    /// adds the required `anthropic-beta` flags for Claude Code OAuth access.
+    pub fn use_oauth(mut self, use_oauth: bool) -> Self {
+        self.settings.use_oauth = use_oauth;
+        self
+    }
+
     /// Sets extra body fields to merge into every request.
     pub fn body(mut self, body: serde_json::Value) -> Self {
         if let serde_json::Value::Object(map) = body {

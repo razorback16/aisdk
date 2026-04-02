@@ -87,14 +87,26 @@ impl From<LanguageModelOptions> for AnthropicOptions {
                     }
                 }
                 Message::Tool(tool) => {
-                    messages.push(AnthropicMessageParam::User {
-                        content: crate::providers::anthropic::client::AnthropicUserMessageContent::Blocks(vec![
-                            crate::providers::anthropic::client::AnthropicUserMessageContentBlock::ToolResult {
-                                tool_use_id: tool.tool.id,
-                                content: tool.output.unwrap_or_default().to_string(),
-                            },
-                        ]),
-                    });
+                    let block = crate::providers::anthropic::client::AnthropicUserMessageContentBlock::ToolResult {
+                        tool_use_id: tool.tool.id,
+                        content: tool.output.unwrap_or_default().to_string(),
+                    };
+                    // Merge consecutive tool results into a single User message
+                    // with multiple tool_result blocks. Anthropic requires all
+                    // results for parallel tool calls in one user message.
+                    if let Some(AnthropicMessageParam::User {
+                        content:
+                            crate::providers::anthropic::client::AnthropicUserMessageContent::Blocks(
+                                blocks,
+                            ),
+                    }) = messages.last_mut()
+                    {
+                        blocks.push(block);
+                    } else {
+                        messages.push(AnthropicMessageParam::User {
+                            content: crate::providers::anthropic::client::AnthropicUserMessageContent::Blocks(vec![block]),
+                        });
+                    }
                 }
                 Message::Developer(dev) => {
                     messages.push(AnthropicMessageParam::User {

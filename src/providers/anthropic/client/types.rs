@@ -216,6 +216,17 @@ pub(crate) struct AnthropicTool {
     pub input_schema: serde_json::Value,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub(crate) enum AnthropicToolChoice {
+    #[serde(rename = "auto")]
+    Auto,
+    #[serde(rename = "any")]
+    Any,
+    #[serde(rename = "tool")]
+    Tool { name: String },
+}
+
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub(crate) enum AnthropicThinking {
