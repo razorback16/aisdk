@@ -239,7 +239,9 @@ impl<M: ModelName> LanguageModel for OpenAI<M> {
             }
         };
 
-        let stream = openai_stream.map(|evt_res| match evt_res {
+        let mut completed_tool_calls: Vec<(String, String, String)> = Vec::new();
+
+        let stream = openai_stream.map(move |evt_res| match evt_res {
             Ok(client::OpenAiStreamEvent::ResponseOutputItemAdded { item, .. }) => match item {
                 // Handle "start" events
                 types::MessageItem::FunctionCall { id, name, .. } => {
@@ -296,14 +298,26 @@ impl<M: ModelName> LanguageModel for OpenAI<M> {
                 LanguageModelStreamChunkType::ToolCallDelta { id: item_id, delta },
             )]),
 
+            Ok(client::OpenAiStreamEvent::ResponseOutputItemDone {
+                item: types::MessageItem::FunctionCall { call_id, name, arguments, .. },
+                ..
+            }) => {
+                completed_tool_calls.push((call_id, name, arguments));
+                Ok(vec![])
+            }
+
+            Ok(client::OpenAiStreamEvent::ResponseOutputItemDone { .. }) => Ok(vec![]),
+
+            Ok(client::OpenAiStreamEvent::ResponseFunctionCallArgumentsDone { .. }) => Ok(vec![]),
+
             Ok(client::OpenAiStreamEvent::ResponseCompleted { response, .. }) => {
                 let mut result: Vec<LanguageModelStreamChunk> = Vec::new();
 
                 let usage: Usage = response.usage.unwrap_or_default().into();
                 let output = response.output.unwrap_or_default();
 
-                for msg in output {
-                    match &msg {
+                for msg in &output {
+                    match msg {
                         // ---- Final OutputMessage ----
                         types::MessageItem::OutputMessage { content, .. } => {
                             if let Some(types::OutputContent::OutputText { text, .. }) =
@@ -347,6 +361,22 @@ impl<M: ModelName> LanguageModel for OpenAI<M> {
                         }
 
                         _ => {}
+                    }
+                }
+
+                // Codex fallback: output is empty but tool calls were delivered
+                // via ResponseOutputItemDone events.
+                if !output.iter().any(|item| matches!(item, types::MessageItem::FunctionCall { .. }))
+                    && !completed_tool_calls.is_empty()
+                {
+                    for (call_id, name, arguments) in completed_tool_calls.drain(..) {
+                        let mut tool_info = ToolCallInfo::new(name);
+                        tool_info.id(call_id);
+                        tool_info.input(serde_json::from_str(&arguments).unwrap_or_default());
+                        result.push(LanguageModelStreamChunk::Done(AssistantMessage {
+                            content: LanguageModelResponseContentType::ToolCall(tool_info),
+                            usage: Some(usage.clone()),
+                        }));
                     }
                 }
 
