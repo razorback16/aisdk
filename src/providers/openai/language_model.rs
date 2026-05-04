@@ -350,6 +350,16 @@ impl<M: ModelName> LanguageModel for OpenAI<M> {
                     }
                 }
 
+                // chatgpt.com/backend-api/codex returns output:[] in the completed event
+                // (text was already delivered via delta events). Emit a Done so the
+                // stream terminates properly for the caller.
+                if result.is_empty() {
+                    result.push(LanguageModelStreamChunk::Done(AssistantMessage {
+                        content: LanguageModelResponseContentType::new(String::new()),
+                        usage: Some(usage),
+                    }));
+                }
+
                 Ok(result)
             }
 
